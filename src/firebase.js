@@ -8,13 +8,13 @@ import { initializeApp } from "firebase/app";
 import { getDatabase } from "firebase/database";
 
 const firebaseConfig = {
-  apiKey: "TU_API_KEY",
-  authDomain: "TU_PROYECTO.firebaseapp.com",
-  databaseURL: "TU_DATABASE_URL",
-  projectId: "TU_PROYECTO",
-  storageBucket: "TU_PROYECTO.appspot.com",
-  messagingSenderId: "TU_MESSAGING_SENDER_ID",
-  appId: "TU_APP_ID",
+  apiKey: "AIzaSyBYqqZIscgelR-IZYl4BssPESAlaaNKSyI",
+  authDomain: "family-rewards-d235b.firebaseapp.com",
+  databaseURL: "https://family-rewards-d235b-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "family-rewards-d235b",
+  storageBucket: "family-rewards-d235b.firebasestorage.app",
+  messagingSenderId: "174516718770",
+  appId: "1:174516718770:web:fe4bdb9af5369696540dab",
 };
 
 const app = initializeApp(firebaseConfig);
