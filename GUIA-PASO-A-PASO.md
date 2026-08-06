@@ -59,66 +59,58 @@ No hace falta que entiendas los detalles; solo sigue los pasos.
 
 ---
 
-## Parte 2 — Crear la base de datos en Firebase
+## Parte 2 — Crear la base de datos en Firebase (Realtime Database)
+
+> Usamos **Realtime Database** (no Firestore). Es otra base de datos del mismo Firebase, también gratuita y en tiempo real, que no da el error de facturación.
 
 ### 2.1 Crear el proyecto
 1. Ve a **https://console.firebase.google.com** e inicia sesión con tu cuenta de Google.
 2. Pulsa **Agregar proyecto** (o "Create a project").
 3. Ponle un nombre, por ejemplo `family-rewards`. Pulsa **Continuar**.
-4. Si te pregunta por **Google Analytics**, puedes **desactivarlo** (no lo necesitas). Pulsa **Crear proyecto** y espera a que termine.
+4. Si te pregunta por **Google Analytics**, puedes **desactivarlo**. Pulsa **Crear proyecto** y espera.
 
-### 2.2 Crear la base de datos (Firestore)
-1. En el menú de la izquierda, entra en **Compilación (Build) → Firestore Database**.
+### 2.2 Crear la base de datos (Realtime Database)
+1. En el menú de la izquierda, entra en **Compilación (Build) → Realtime Database**.
+   - Ojo: **Realtime Database**, no "Firestore Database".
 2. Pulsa **Crear base de datos**.
-3. Elige una ubicación cercana (por ejemplo `eur3` para Europa). Pulsa **Siguiente**.
-4. Cuando pregunte por el modo, elige **Comenzar en modo de prueba** y pulsa **Habilitar**. Espera a que se cree.
+3. Elige una ubicación (por ejemplo, Europa / Bélgica `europe-west1`). Pulsa **Siguiente**.
+4. Cuando pregunte por las reglas, elige **Comenzar en modo de prueba** y pulsa **Habilitar**.
 
 ### 2.3 Ajustar las reglas de seguridad
-1. Dentro de Firestore, arriba, pulsa la pestaña **Reglas** (Rules).
+1. Dentro de Realtime Database, arriba, pulsa la pestaña **Reglas** (Rules).
 2. Borra lo que haya y pega **exactamente** esto:
 ```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /families/{familyId} {
-      allow read, write: if true;
-    }
+{
+  "rules": {
+    ".read": true,
+    ".write": true
   }
 }
 ```
 3. Pulsa **Publicar** (Publish).
 
-> ¿Qué significa esto? Que cualquiera que conozca tu dirección web pueda leer/escribir los datos de la familia. Para uso familiar es suficiente; en el Paso 6 usaremos un identificador difícil de adivinar como candado extra.
+> Esto deja el acceso abierto a quien conozca tu dirección web; para uso familiar es suficiente (en el Paso 6 usamos un identificador difícil de adivinar como candado extra).
 
 ### 2.4 Conseguir las "llaves" de conexión (firebaseConfig)
 1. Arriba a la izquierda, pulsa la **rueda dentada ⚙️ → Configuración del proyecto**.
-2. Baja hasta la sección **Tus apps** y pulsa el icono de web **`</>`**.
-3. Ponle un apodo (ej. `family-rewards-web`) y pulsa **Registrar app**. **No** marques Firebase Hosting.
-4. Verás un bloque de código con algo así:
-```
-const firebaseConfig = {
-  apiKey: "AIza........",
-  authDomain: "family-rewards-xxxx.firebaseapp.com",
-  projectId: "family-rewards-xxxx",
-  storageBucket: "family-rewards-xxxx.appspot.com",
-  messagingSenderId: "123456789",
-  appId: "1:1234:web:abcd...."
-};
-```
-5. **Deja esta pestaña abierta** (o copia ese bloque en un bloc de notas). Lo necesitas en la Parte 3.
+2. Baja a **Tus apps** y pulsa el icono de web **`</>`**.
+3. Ponle un apodo (ej. `family-rewards-web`) y pulsa **Registrar app**. No marques Hosting.
+4. Verás un bloque `firebaseConfig`. Como ya has creado la Realtime Database, **debe incluir una línea `databaseURL`** parecida a:
+   `databaseURL: "https://family-rewards-xxxx-default-rtdb.europe-west1.firebasedatabase.app"`
+   - Si no ves `databaseURL`, vuelve a **Realtime Database**, copia la URL que aparece arriba (empieza por `https://` y contiene `-default-rtdb`) y úsala en el paso siguiente.
+5. Deja esta pestaña abierta (o copia el bloque en un bloc de notas). Lo necesitas en la Parte 3.
 
-✅ **Cómo saber que ha ido bien:** tienes a la vista tus valores `apiKey`, `projectId`, `appId`, etc.
-
----
+✅ **Cómo saber que ha ido bien:** tienes a la vista tus valores `apiKey`, `projectId`, `appId` y, sobre todo, `databaseURL`.
 
 ## Parte 3 — Pegar tus llaves en la app (editando en GitHub)
 
 1. Vuelve a la pestaña de **GitHub**, a tu repositorio.
 2. Entra en la carpeta **`src`** y pincha en el archivo **`firebase.js`**.
 3. Arriba a la derecha del archivo, pulsa el icono del **lápiz ✏️** (Edit this file).
-4. Verás unas líneas con valores `TU_API_KEY`, `TU_PROYECTO`, etc. **Sustituye cada uno** por el valor correspondiente de tu `firebaseConfig`:
+4. Verás unas líneas con valores `TU_API_KEY`, `TU_DATABASE_URL`, `TU_PROYECTO`, etc. **Sustituye cada uno** por el valor correspondiente de tu `firebaseConfig`:
    - `apiKey` → donde pone `TU_API_KEY`
    - `authDomain` → `TU_PROYECTO.firebaseapp.com`
+   - `databaseURL` → **muy importante**: pega aquí tu URL real (la que contiene `-default-rtdb`), en `TU_DATABASE_URL`
    - `projectId` → `TU_PROYECTO`
    - `storageBucket` → `TU_PROYECTO.appspot.com`
    - `messagingSenderId` → `TU_MESSAGING_SENDER_ID`
@@ -211,7 +203,7 @@ Después, en **modo padres → pestaña Ajustes**, te recomiendo:
 ## Si algo no funciona (problemas típicos)
 
 - **La web sale en blanco:** casi siempre es un fallo en `firebase.js` (Parte 3). Revisa que no quede ningún `TU_...` y que no falte ninguna comilla. Corrige en GitHub → Commit → espera 2 min.
-- **"Missing or insufficient permissions" o no guarda nada:** falta publicar las reglas de Firestore (Parte 2.3).
+- **No guarda nada / error de permisos:** falta publicar las reglas de la Realtime Database (Parte 2.3), o falta la `databaseURL` en `firebase.js` (Parte 3).
 - **No aparece "Añadir a pantalla de inicio":** estás usando Chrome en el móvil; hazlo con **Safari**.
 - **El iPad y el iPhone no ven lo mismo:** asegúrate de que ambos usan el **mismo** `?family=...` (o ninguno). Comprueba también que ambos abren la **misma dirección** de Vercel.
 - **No llegan las notificaciones:** ábrela desde el icono de la pantalla de inicio (no desde Safari), en modo padres, y vuelve a pulsar Activar avisos.
@@ -224,5 +216,5 @@ No hace falta volver a empezar. Edita el archivo que quieras en GitHub (lápiz �
 - **Repositorio (repo):** la carpeta de tu proyecto guardada en GitHub.
 - **Commit:** guardar un cambio en GitHub.
 - **Deploy / Desplegar:** publicar la app para que sea accesible por internet (lo hace Vercel).
-- **Firestore:** la base de datos en la nube (dentro de Firebase).
+- **Realtime Database:** la base de datos en la nube en tiempo real (dentro de Firebase) que usa esta app.
 - **PWA:** una web que se "instala" en el móvil y se comporta como una app.

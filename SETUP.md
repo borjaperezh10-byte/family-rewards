@@ -25,18 +25,15 @@ Arquitectura: iPad (modo niño) ⇄ Firestore (nube) ⇄ iPhone (modo padres). A
 
 ## Paso 2 — Crear el proyecto de Firebase (navegador)
 1. Entra en https://console.firebase.google.com → **Agregar proyecto** (puedes desactivar Analytics).
-2. Menú lateral → **Compilación → Firestore Database → Crear base de datos** → ubicación (ej. `eur3`) → arranca en **modo de prueba**.
+2. Menú lateral → **Compilación → Realtime Database → Crear base de datos** → ubicación (ej. `eur3`) → arranca en **modo de prueba**.
 
 ## Paso 3 — Conectar la app con tu Firebase
 1. En Firebase: rueda dentada ⚙️ → **Configuración del proyecto** → **Tus apps** → icono **</>** (Web) → registra la app y copia el objeto `firebaseConfig`.
 2. En GitHub, abre `src/firebase.js`, pulsa el lápiz ✏️ y sustituye los valores `TU_...` por los tuyos. **Commit**.
-3. En **Firestore → Reglas**, pega esto y publica:
+3. En **Realtime Database → Reglas**, pega esto y publica:
 ```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /families/{familyId} { allow read, write: if true; }
-  }
+{
+  "rules": { ".read": true, ".write": true }
 }
 ```
 > Deja el acceso abierto a quien tenga el enlace; para uso familiar suele bastar. Usa un `family` id difícil de adivinar (ver Paso 6).
@@ -74,5 +71,5 @@ Edita cualquier archivo en GitHub (lápiz ✏️ → Commit). Vercel vuelve a de
 Requiere Firebase Cloud Messaging (FCM): activar Cloud Messaging + clave VAPID, un `firebase-messaging-sw.js`, guardar el token del iPhone en Firestore y un servicio que envíe el push. Para mantenerlo **gratis sin activar tarjeta**, ese envío se pone como **función serverless en Vercel** (no en Cloud Functions de Firebase, que piden plan Blaze). Se puede añadir cuando quieras.
 
 ## Notas
-- **Fotos**: se reducen bastante al subirlas para no superar el límite de 1 MB por documento de Firestore. Con unas cuantas tareas/recompensas vas sobrado.
+- **Fotos**: se reducen bastante al subirlas para no superar el límites de la Realtime Database. Con unas cuantas tareas/recompensas vas sobrado.
 - **App Store**: este mismo código se puede empaquetar con **Capacitor** y publicar con la cuenta de Apple Developer (99 $/año). La PWA de esta guía no necesita nada de eso.
