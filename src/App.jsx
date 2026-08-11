@@ -277,16 +277,47 @@ function playChime(kind) {
 }
 
 const CONFETTI_COLORS = ["#FF6FA5", "#4FC3E8", "#6FCF97", "#FFC93C", "#A78BFA"];
-function Confetti() {
-  const pieces = Array.from({ length: 44 });
+
+const THEMES = {
+  default: { label: "✨ Normal", bg: "#FFF8EF", confetti: ["🎉", "⭐", "🎊", "🌟", "✨"] },
+  unicorn: { label: "🦄 Unicornios", bg: "linear-gradient(160deg, #FFE3F3 0%, #ECE1FF 100%)", confetti: ["🦄", "🌈", "⭐", "💖", "👑", "✨"] },
+  football: { label: "⚽ Fútbol", bg: "linear-gradient(160deg, #DFF3E6 0%, #CDE9D6 100%)", confetti: ["⚽", "🏆", "🥅", "👟", "🎽", "🔥"] },
+  cars: { label: "🚗 Coches", bg: "linear-gradient(160deg, #E4ECFF 0%, #E8E9EE 100%)", confetti: ["🚗", "🏎️", "🏁", "🛞", "💨", "🏆"] },
+};
+function themeOf(child) {
+  return child && child.theme && THEMES[child.theme] ? child.theme : "default";
+}
+
+const PRAISE_MESSAGES = [
+  "¡Muy bien hecho! 🌟", "¡Estamos súper orgullosos de ti! 💛", "¡Eres un crack! 🎉",
+  "¡Qué bien lo has hecho! 👏", "¡Buen trabajo, campeón/a! 🏆", "¡Así se hace! 💪",
+  "¡Increíble esfuerzo! ✨", "¡Nos encanta tu ayuda! 🤗", "¡Sigue así, lo estás petando! 🚀",
+  "¡Eres una estrella! ⭐", "¡Qué responsable eres! 🙌", "¡Chócala, lo has clavado! ✋",
+  "¡Cada día lo haces mejor! 🌈", "¡Un diez para ti! 💯", "¡Gracias por ayudar tanto! 💖",
+];
+
+const PRAISE_ANIMS = [
+  ["💛", "🌟", "✨", "💫"],
+  ["🎉", "🎊", "🥳", "🎈"],
+  ["⭐", "🌟", "✨", "💫"],
+  ["👏", "🙌", "👍", "💪"],
+  ["🌈", "🦋", "🌸", "☁️"],
+  ["🎈", "🎉", "💖", "🎊"],
+  ["🔥", "⚡", "💥", "🌟"],
+  ["💖", "💛", "💙", "💚"],
+];
+
+function Confetti({ theme = "default", emojis = null }) {
+  const set = emojis && emojis.length ? emojis : (THEMES[theme] || THEMES.default).confetti;
+  const pieces = Array.from({ length: 42 });
   return (
     <div className="fr-confetti">
       {pieces.map((_, i) => {
         const left = Math.random() * 100;
-        const delay = Math.random() * 0.2;
-        const dur = 1 + Math.random() * 0.9;
-        const size = 6 + Math.random() * 9;
-        return <span key={i} className="fr-confetti-piece" style={{ left: left + "%", background: CONFETTI_COLORS[i % CONFETTI_COLORS.length], width: size, height: size, animationDelay: delay + "s", animationDuration: dur + "s" }} />;
+        const delay = Math.random() * 0.25;
+        const dur = 1.3 + Math.random() * 1.1;
+        const size = 18 + Math.random() * 16;
+        return <span key={i} className="fr-confetti-emoji" style={{ left: left + "%", fontSize: size, animationDelay: delay + "s", animationDuration: dur + "s" }}>{set[i % set.length]}</span>;
       })}
     </div>
   );
@@ -308,11 +339,17 @@ export default function FamilyRewardsApp() {
   const [burst, setBurst] = useState(false);
   const [notifyOn, setNotifyOn] = useState(typeof window !== "undefined" && localStorage.getItem("fr-notify") === "1");
   const prevPendingRef = useRef(null);
+  const [burstTheme, setBurstTheme] = useState("default");
+  const [burstEmojis, setBurstEmojis] = useState(null);
+  const [celebQueue, setCelebQueue] = useState([]);
+  const lastPraiseAnimRef = useRef(null);
 
-  function celebrateBurst(kind) {
+  function celebrateBurst(kind, theme = "default", emojis = null) {
     playChime(kind);
+    setBurstTheme(theme);
+    setBurstEmojis(emojis);
     setBurst(true);
-    setTimeout(() => setBurst(false), 1500);
+    setTimeout(() => setBurst(false), 1600);
   }
 
   useEffect(() => {
@@ -389,6 +426,48 @@ export default function FamilyRewardsApp() {
     }
   }, [data]);
 
+  // Load queued celebrations when someone opens a child's profile in kid mode.
+  useEffect(() => {
+    if (mode !== "kid" || !data) return;
+    const childId = activeChildId || data.children[0]?.id;
+    const pend = data.pending && data.pending[childId];
+    if (celebQueue.length === 0 && pend && pend.length) {
+      setCelebQueue(pend);
+      const next = structuredClone(data);
+      if (!next.pending) next.pending = {};
+      next.pending[childId] = [];
+      save(next);
+    }
+  }, [mode, activeChildId, data, celebQueue.length, save]);
+
+  // Play the queued celebrations one by one, themed for the active child.
+  useEffect(() => {
+    if (celebQueue.length === 0 || !data) return;
+    const childId = activeChildId || data.children[0]?.id;
+    const child = data.children.find((c) => c.id === childId);
+    const theme = themeOf(child);
+    const ev = celebQueue[0];
+    if (ev.kind === "coins") setCelebration({ kind: "coins-approved", child: child?.name, coins: ev.coins });
+    else if (ev.kind === "surprise") setCelebration({ kind: "surprise", child: child?.name, bonus: ev.coins });
+    else if (ev.kind === "badge") setCelebration({ kind: "badge", child: child?.name, badge: ev.badge });
+    celebrateBurst("big", theme);
+    const t = setTimeout(() => { setCelebration(null); setCelebQueue((q) => q.slice(1)); }, 3200);
+    return () => clearTimeout(t);
+  }, [celebQueue]);
+
+  // Play the random praise animation on the child's profile when a new praise arrives.
+  useEffect(() => {
+    if (mode !== "kid" || !data || !data.praise) return;
+    const p = data.praise;
+    const childId = activeChildId || data.children[0]?.id;
+    if (p.childId !== childId) return;
+    if (Date.now() - p.ts > 86400000) return;
+    if (lastPraiseAnimRef.current === p.ts) return;
+    lastPraiseAnimRef.current = p.ts;
+    const emojis = PRAISE_ANIMS[p.anim ?? 0] || PRAISE_ANIMS[0];
+    celebrateBurst("success", "default", emojis);
+  }, [mode, activeChildId, data]);
+
   if (ready && !data) {
     return <Onboarding onFinish={(family) => { save(family); setActiveChildId(family.children[0].id); }} />;
   }
@@ -445,13 +524,18 @@ export default function FamilyRewardsApp() {
         if (!next.records) next.records = {};
         if (newStreak > (next.records[childId] || 0)) next.records[childId] = newStreak;
 
+        // Build the celebration events, but DON'T animate here (parent device).
+        // They are queued and play when someone opens this child's profile in kid mode.
+        const events = [];
+        const coins = task.points ?? 1;
+        if (coins > 0) events.push({ id: uid(), kind: "coins", coins });
+
         // Occasional surprise bonus — unexpected rewards reinforce without harming motivation.
-        let surprised = null;
-        if ((task.points ?? 1) > 0 && Math.random() < 0.18) {
+        if (coins > 0 && Math.random() < 0.18) {
           const bonus = 1 + Math.floor(Math.random() * 3);
           if (!next.bonuses) next.bonuses = [];
           next.bonuses.push({ id: uid(), childId, coins: bonus, reason: "sorpresa", ts: Date.now() });
-          surprised = bonus;
+          events.push({ id: uid(), kind: "surprise", coins: bonus });
         }
 
         if (!next.achievements) next.achievements = {};
@@ -459,19 +543,14 @@ export default function FamilyRewardsApp() {
         const nowEarned = earnedAchievements(next, childId);
         const newly = nowEarned.filter((id) => !already.includes(id));
         next.achievements[childId] = nowEarned;
-
-        const child = next.children.find((c) => c.id === childId);
         if (newly.length) {
           const medal = ACHIEVEMENTS.find((a) => a.id === newly[newly.length - 1]);
-          setCelebration({ kind: "badge", child: child.name, badge: { name: medal.name, icon: medal.icon } });
-          setTimeout(() => setCelebration(null), 3600);
-          celebrateBurst("big");
-        } else if (surprised) {
-          setCelebration({ kind: "surprise", child: child.name, bonus: surprised });
-          setTimeout(() => setCelebration(null), 3000);
-          celebrateBurst("big");
-        } else {
-          celebrateBurst("success");
+          events.push({ id: uid(), kind: "badge", badge: { name: medal.name, icon: medal.icon } });
+        }
+
+        if (events.length) {
+          if (!next.pending) next.pending = {};
+          next.pending[childId] = [...(next.pending[childId] || []), ...events];
         }
       }
     }
@@ -479,11 +558,18 @@ export default function FamilyRewardsApp() {
   }
 
   function sendPraise(childId) {
-    const messages = ["¡Muy bien hecho! 🌟", "¡Estamos orgullosos de ti! 💛", "¡Qué campeón/a! 🎉", "¡Buen trabajo! 👏"];
+    const prevMsg = data.praise && data.praise.childId === childId ? data.praise.message : null;
+    let message = PRAISE_MESSAGES[Math.floor(Math.random() * PRAISE_MESSAGES.length)];
+    let guard = 0;
+    while (message === prevMsg && guard < 10) {
+      message = PRAISE_MESSAGES[Math.floor(Math.random() * PRAISE_MESSAGES.length)];
+      guard++;
+    }
+    const anim = Math.floor(Math.random() * PRAISE_ANIMS.length);
     const next = structuredClone(data);
-    next.praise = { childId, message: messages[Math.floor(Math.random() * messages.length)], ts: Date.now() };
+    next.praise = { childId, message, anim, ts: Date.now() };
     save(next);
-    celebrateBurst("success");
+    celebrateBurst("success", "default", PRAISE_ANIMS[anim]);
   }
 
   function dismissPraise() {
@@ -505,11 +591,20 @@ export default function FamilyRewardsApp() {
     save(next);
   }
 
-  async function addTask(childId, title, points, frequency, photoFile, description, kind) {
+  function setChildTheme(childId, theme) {
+    const next = structuredClone(data);
+    const c = next.children.find((x) => x.id === childId);
+    if (c) c.theme = theme;
+    save(next);
+  }
+
+  async function addTask(childId, title, points, frequency, photoFile, description, kind, photoUrl) {
     if (!title.trim()) return;
     const next = structuredClone(data);
     let photo = null;
-    if (photoFile) {
+    if (photoUrl && photoUrl.trim()) {
+      photo = photoUrl.trim();
+    } else if (photoFile) {
       try { photo = await fileToResizedDataUrl(photoFile); } catch (e) { console.error(e); }
     }
     const isFamily = kind === "family";
@@ -529,6 +624,14 @@ export default function FamilyRewardsApp() {
     }
   }
 
+  function updateTaskPhotoUrl(taskId, url) {
+    if (!url || !url.trim()) return;
+    const next = structuredClone(data);
+    const task = next.tasks.find((t) => t.id === taskId);
+    if (task) task.photo = url.trim();
+    save(next);
+  }
+
   function removeTask(taskId) {
     const next = structuredClone(data);
     const t = next.tasks.find((x) => x.id === taskId);
@@ -536,12 +639,14 @@ export default function FamilyRewardsApp() {
     save(next);
   }
 
-  async function addReward(childId, title, cost, icon, photoFile, description, tag) {
+  async function addReward(childId, title, cost, icon, photoFile, description, tag, photoUrl) {
     if (!title.trim() || !cost) return;
     const next = structuredClone(data);
     if (!next.rewards) next.rewards = [];
     let photo = null;
-    if (photoFile) {
+    if (photoUrl && photoUrl.trim()) {
+      photo = photoUrl.trim();
+    } else if (photoFile) {
       try { photo = await fileToResizedDataUrl(photoFile); } catch (e) { console.error(e); }
     }
     next.rewards.push({ id: uid(), childId, title: title.trim(), cost: Number(cost), icon: icon || "🎁", active: true, photo, description: (description || "").trim(), tag: (tag || "").trim() });
@@ -558,6 +663,14 @@ export default function FamilyRewardsApp() {
     } catch (e) {
       console.error("No se pudo actualizar la foto de la recompensa", e);
     }
+  }
+
+  function updateRewardPhotoUrl(rewardId, url) {
+    if (!url || !url.trim()) return;
+    const next = structuredClone(data);
+    const reward = next.rewards.find((r) => r.id === rewardId);
+    if (reward) reward.photo = url.trim();
+    save(next);
   }
 
   function removeReward(rewardId) {
@@ -637,10 +750,12 @@ export default function FamilyRewardsApp() {
     }
   }
 
+  const rootBg = mode === "kid" ? (THEMES[themeOf(activeChild)] || THEMES.default).bg : THEMES.default.bg;
+
   return (
-    <div style={styles.appBg}>
+    <div style={{ ...styles.appBg, background: rootBg }}>
       <StyleBlock />
-      {burst && <Confetti />}
+      {burst && <Confetti theme={burstTheme} emojis={burstEmojis} />}
       {celebration && (
         <div className="fr-celebration">
           <div className="fr-celebration-card">
@@ -655,6 +770,12 @@ export default function FamilyRewardsApp() {
                 <div style={{ fontSize: 48 }}>🎁</div>
                 <div className="fr-celebration-title">¡Sorpresa!</div>
                 <div className="fr-celebration-sub">{celebration.child} gana <strong>+{celebration.bonus} monedas</strong> de regalo</div>
+              </>
+            ) : celebration.kind === "coins-approved" ? (
+              <>
+                <div style={{ fontSize: 48 }}>🪙</div>
+                <div className="fr-celebration-title">¡Monedas conseguidas!</div>
+                <div className="fr-celebration-sub">{celebration.child} gana <strong>+{celebration.coins} monedas</strong></div>
               </>
             ) : (
               <>
@@ -812,16 +933,16 @@ export default function FamilyRewardsApp() {
                 onDecideTask={decideTask} onDecideRedemption={decideRedemption} onPraise={() => sendPraise(activeChild.id)} />
             )}
             {parentTab === "tareas" && (
-              <TasksManager activeChild={activeChild} tasks={childTasksAll} onAdd={(title, points, freq, photoFile, description, kind) => addTask(activeChild.id, title, points, freq, photoFile, description, kind)} onRemove={removeTask} onUpdatePhoto={updateTaskPhoto} />
+              <TasksManager activeChild={activeChild} tasks={childTasksAll} onAdd={(title, points, freq, photoFile, description, kind, photoUrl) => addTask(activeChild.id, title, points, freq, photoFile, description, kind, photoUrl)} onRemove={removeTask} onUpdatePhoto={updateTaskPhoto} onUpdatePhotoUrl={updateTaskPhotoUrl} />
             )}
             {parentTab === "recompensas" && (
-              <RewardsManager activeChild={activeChild} rewards={rewards} onAdd={(title, cost, icon, photoFile, description, tag) => addReward(activeChild.id, title, cost, icon, photoFile, description, tag)} onRemove={removeReward} onUpdatePhoto={updateRewardPhoto} redemptions={redemptions} />
+              <RewardsManager activeChild={activeChild} rewards={rewards} onAdd={(title, cost, icon, photoFile, description, tag, photoUrl) => addReward(activeChild.id, title, cost, icon, photoFile, description, tag, photoUrl)} onRemove={removeReward} onUpdatePhoto={updateRewardPhoto} onUpdatePhotoUrl={updateRewardPhotoUrl} redemptions={redemptions} />
             )}
             {parentTab === "progreso" && (
               <ProgressView child={activeChild} streak={streak} milestone={milestone} earnedAch={earnedAch} stats={stats} tasks={childTasksAll} logs={data.logs} today={today} />
             )}
             {parentTab === "ajustes" && (
-              <SettingsPanel settings={settings} onUpdate={updateSettings} children={children} activeChild={activeChild} onSetColor={setChildColor} />
+              <SettingsPanel settings={settings} onUpdate={updateSettings} children={children} activeChild={activeChild} onSetColor={setChildColor} onSetTheme={setChildTheme} />
             )}
           </main>
         </>
@@ -832,7 +953,7 @@ export default function FamilyRewardsApp() {
 
 /* ---------------- Kid: Today ---------------- */
 /* ---------------- Shared: rich media card (PointUp style) ---------------- */
-function RichItemCard({ photo, iconFallback, colorFallback, pill, badge, title, description, onDelete, onPhotoPick, children, dimmed }) {
+function RichItemCard({ photo, iconFallback, colorFallback, pill, badge, title, description, onDelete, onPhotoPick, onPhotoUrl, children, dimmed }) {
   const mediaStyle = photo
     ? { backgroundImage: `url(${photo})` }
     : { background: `linear-gradient(155deg, ${colorFallback || "#4FC3E8"}, #10151c)` };
@@ -844,12 +965,20 @@ function RichItemCard({ photo, iconFallback, colorFallback, pill, badge, title, 
         {onDelete && (
           <button className="fr-rich-delete" title="Quitar" onClick={onDelete}>🗑️</button>
         )}
-        {onPhotoPick && (
-          <label className="fr-rich-photo-edit" title="Cambiar foto">
-            📷
-            <input type="file" accept="image/*" style={{ display: "none" }}
-              onChange={(e) => { const f = e.target.files[0]; if (f) onPhotoPick(f); e.target.value = ""; }} />
-          </label>
+        {(onPhotoPick || onPhotoUrl) && (
+          <span className="fr-rich-photo-actions">
+            {onPhotoPick && (
+              <label className="fr-rich-photo-edit" title="Subir foto">
+                📷
+                <input type="file" accept="image/*" style={{ display: "none" }}
+                  onChange={(e) => { const f = e.target.files[0]; if (f) onPhotoPick(f); e.target.value = ""; }} />
+              </label>
+            )}
+            {onPhotoUrl && (
+              <button className="fr-rich-photo-edit" title="Poner foto por URL"
+                onClick={() => { const u = window.prompt("Pega la URL de la imagen (https://...)"); if (u) onPhotoUrl(u); }}>🔗</button>
+            )}
+          </span>
         )}
         {badge != null && <span className="fr-rich-badge">{badge}</span>}
       </div>
@@ -1142,7 +1271,7 @@ function ApprovalsPanel({ activeChild, taskApprovals, redemptionApprovals, onDec
 }
 
 /* ---------------- Parent: Tasks manager ---------------- */
-function TasksManager({ activeChild, tasks, onAdd, onRemove, onUpdatePhoto }) {
+function TasksManager({ activeChild, tasks, onAdd, onRemove, onUpdatePhoto, onUpdatePhotoUrl }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [points, setPoints] = useState(1);
@@ -1151,6 +1280,7 @@ function TasksManager({ activeChild, tasks, onAdd, onRemove, onUpdatePhoto }) {
   const [date, setDate] = useState("");
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
+  const [photoUrl, setPhotoUrl] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("reward"); // "reward" da monedas · "family" no
@@ -1163,6 +1293,7 @@ function TasksManager({ activeChild, tasks, onAdd, onRemove, onUpdatePhoto }) {
   function pickPhoto(file) {
     if (!file) return;
     setPhotoFile(file);
+    setPhotoUrl("");
     const reader = new FileReader();
     reader.onload = (e) => setPhotoPreview(e.target.result);
     reader.readAsDataURL(file);
@@ -1172,8 +1303,8 @@ function TasksManager({ activeChild, tasks, onAdd, onRemove, onUpdatePhoto }) {
     let frequency = { type: "daily" };
     if (freqType === "weekly") frequency = { type: "weekly", days: weekdays };
     if (freqType === "date") frequency = { type: "date", date };
-    onAdd(title, Number(points) || 1, frequency, photoFile, description, kind);
-    setTitle(""); setDescription(""); setPoints(1); setFreqType("daily"); setWeekdays([]); setDate(""); setPhotoFile(null); setPhotoPreview(null); setKind("reward"); setShowForm(false);
+    onAdd(title, Number(points) || 1, frequency, photoFile, description, kind, photoUrl);
+    setTitle(""); setDescription(""); setPoints(1); setFreqType("daily"); setWeekdays([]); setDate(""); setPhotoFile(null); setPhotoPreview(null); setPhotoUrl(""); setKind("reward"); setShowForm(false);
   }
 
   const filtered = tasks.filter((t) => t.title.toLowerCase().includes(query.toLowerCase()));
@@ -1189,7 +1320,7 @@ function TasksManager({ activeChild, tasks, onAdd, onRemove, onUpdatePhoto }) {
           {filtered.map((t) => (
             <RichItemCard key={t.id} photo={t.photo} iconFallback={t.kind === "family" ? "🏠" : "✅"} colorFallback={activeChild.color}
               pill={freqLabelShort(t)} badge={taskBadge(t)} title={t.title} description={t.description}
-              onDelete={() => onRemove(t.id)} onPhotoPick={(f) => onUpdatePhoto(t.id, f)} />
+              onDelete={() => onRemove(t.id)} onPhotoPick={(f) => onUpdatePhoto(t.id, f)} onPhotoUrl={(u) => onUpdatePhotoUrl(t.id, u)} />
           ))}
         </div>
       )}
@@ -1198,11 +1329,15 @@ function TasksManager({ activeChild, tasks, onAdd, onRemove, onUpdatePhoto }) {
         <div className="fr-dark-form">
           <div className="fr-form-row">
             <label className="fr-dark-photo-picker">
-              {photoPreview ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoPreview})` }} /> : <span>➕ foto</span>}
+              {photoPreview ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoPreview})` }} />
+                : photoUrl ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoUrl})` }} />
+                : <span>➕ foto</span>}
               <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pickPhoto(e.target.files[0])} />
             </label>
             <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre de la tarea" value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
+          <input className="fr-dark-input" placeholder="…o pega la URL de una imagen (https://...)" value={photoUrl}
+            onChange={(e) => { setPhotoUrl(e.target.value); setPhotoFile(null); setPhotoPreview(null); }} />
           <input className="fr-dark-input" placeholder="Descripción (opcional)" value={description} onChange={(e) => setDescription(e.target.value)} />
           <div className="fr-freq-toggle">
             {[["reward", "🪙 Con recompensa"], ["family", "🏠 Responsabilidad familiar"]].map(([key, label]) => (
@@ -1248,7 +1383,7 @@ function TasksManager({ activeChild, tasks, onAdd, onRemove, onUpdatePhoto }) {
 }
 
 /* ---------------- Parent: Rewards manager ---------------- */
-function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, redemptions }) {
+function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, onUpdatePhotoUrl, redemptions }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [tag, setTag] = useState("");
@@ -1256,6 +1391,7 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
   const [icon, setIcon] = useState("🎁");
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
+  const [photoUrl, setPhotoUrl] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [query, setQuery] = useState("");
 
@@ -1264,14 +1400,15 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
   function pickPhoto(file) {
     if (!file) return;
     setPhotoFile(file);
+    setPhotoUrl("");
     const reader = new FileReader();
     reader.onload = (e) => setPhotoPreview(e.target.result);
     reader.readAsDataURL(file);
   }
 
   function submit() {
-    onAdd(title, cost, icon, photoFile, description, tag);
-    setTitle(""); setDescription(""); setTag(""); setCost(5); setIcon("🎁"); setPhotoFile(null); setPhotoPreview(null); setShowForm(false);
+    onAdd(title, cost, icon, photoFile, description, tag, photoUrl);
+    setTitle(""); setDescription(""); setTag(""); setCost(5); setIcon("🎁"); setPhotoFile(null); setPhotoPreview(null); setPhotoUrl(""); setShowForm(false);
   }
 
   const filtered = rewards.filter((r) => r.title.toLowerCase().includes(query.toLowerCase()));
@@ -1291,7 +1428,7 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
             return (
               <RichItemCard key={r.id} photo={r.photo} iconFallback={r.icon} colorFallback={activeChild.color}
                 pill={pill} badge={`${r.cost} 🪙`} title={r.title} description={r.description}
-                onDelete={() => onRemove(r.id)} onPhotoPick={(f) => onUpdatePhoto(r.id, f)} />
+                onDelete={() => onRemove(r.id)} onPhotoPick={(f) => onUpdatePhoto(r.id, f)} onPhotoUrl={(u) => onUpdatePhotoUrl(r.id, u)} />
             );
           })}
         </div>
@@ -1301,11 +1438,15 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
         <div className="fr-dark-form">
           <div className="fr-form-row">
             <label className="fr-dark-photo-picker">
-              {photoPreview ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoPreview})` }} /> : <span>➕ foto</span>}
+              {photoPreview ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoPreview})` }} />
+                : photoUrl ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoUrl})` }} />
+                : <span>➕ foto</span>}
               <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pickPhoto(e.target.files[0])} />
             </label>
             <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre de la recompensa" value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
+          <input className="fr-dark-input" placeholder="…o pega la URL de una imagen (https://...)" value={photoUrl}
+            onChange={(e) => { setPhotoUrl(e.target.value); setPhotoFile(null); setPhotoPreview(null); }} />
           <input className="fr-dark-input" placeholder="Descripción (opcional)" value={description} onChange={(e) => setDescription(e.target.value)} />
           <input className="fr-dark-input" placeholder="Etiqueta (opcional, ej. Tiempo en familia)" value={tag} onChange={(e) => setTag(e.target.value)} />
           <div className="fr-form-row">
@@ -1329,9 +1470,20 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
 }
 
 /* ---------------- Parent: Settings ---------------- */
-function SettingsPanel({ settings, onUpdate, children, activeChild, onSetColor }) {
+function SettingsPanel({ settings, onUpdate, children, activeChild, onSetColor, onSetTheme }) {
   return (
     <>
+      <section className="fr-card">
+        <h2 className="fr-card-title">Tema de {activeChild.name}</h2>
+        <div className="fr-theme-grid">
+          {Object.entries(THEMES).map(([key, t]) => (
+            <button key={key} className={"fr-theme-chip" + (themeOf(activeChild) === key ? " fr-theme-chip-active" : "")}
+              style={{ "--child-color": activeChild.color }} onClick={() => onSetTheme(activeChild.id, key)}>{t.label}</button>
+          ))}
+        </div>
+        <p className="fr-empty">Cambia el fondo del perfil y la animación de premios (unicornios, fútbol, coches…). Elige el de cada hijo cambiando de pestaña arriba.</p>
+      </section>
+
       <section className="fr-card">
         <h2 className="fr-card-title">Penalizaciones</h2>
         <label className="fr-switch-row">
@@ -1533,15 +1685,15 @@ function StyleBlock() {
       .fr-brand-name { font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 24px; color: #A78BFA; letter-spacing: 0.3px; }
       .fr-child-tabs { display: flex; gap: 8px; padding: 0 20px 12px 20px; flex-wrap: wrap; }
       .fr-child-tab {
-        display: flex; align-items: center; gap: 6px; border: 3px solid var(--child-color, #A78BFA);
+        display: flex; align-items: center; gap: 10px; border: 3px solid var(--child-color, #A78BFA);
         background: white; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 600;
-        padding: 8px 16px; border-radius: 999px; cursor: pointer; font-size: 15px;
-        box-shadow: 0 3px 0 var(--child-color, #A78BFA);
+        padding: 0 20px 0 0; border-radius: 999px; cursor: pointer; font-size: 15px;
+        box-shadow: 0 3px 0 var(--child-color, #A78BFA); overflow: hidden;
       }
       .fr-child-tab-active { background: var(--child-color, #A78BFA); color: white; }
-      .fr-child-emoji { font-size: 18px; }
+      .fr-child-emoji { font-size: 26px; margin-left: 12px; }
       .fr-child-tab-wrap { position: relative; display: inline-flex; }
-      .fr-child-avatar { width: 22px; height: 22px; border-radius: 50%; background-size: cover; background-position: center; display: inline-block; }
+      .fr-child-avatar { width: 48px; height: 48px; border-radius: 50%; background-size: cover; background-position: center; display: block; flex: none; }
       .fr-photo-edit {
         position: absolute; bottom: -6px; right: -6px; width: 22px; height: 22px; border-radius: 50%;
         background: white; border: 2px solid #A78BFA; display: flex; align-items: center; justify-content: center;
@@ -1665,7 +1817,8 @@ function StyleBlock() {
       .fr-rich-media-emoji { font-size: 48px; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.25)); }
       .fr-rich-pill { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: rgba(10,12,16,0.6); color: #F4F4F8; font-family: 'Fredoka', sans-serif; font-size: 11px; padding: 4px 12px; border-radius: 999px; white-space: nowrap; max-width: 80%; overflow: hidden; text-overflow: ellipsis; }
       .fr-rich-delete { position: absolute; top: 10px; right: 10px; width: 30px; height: 30px; border: none; border-radius: 50%; background: #F0574B; color: white; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.25); }
-      .fr-rich-photo-edit { position: absolute; bottom: 10px; left: 10px; width: 30px; height: 30px; border-radius: 50%; background: rgba(10,12,16,0.6); display: flex; align-items: center; justify-content: center; font-size: 13px; cursor: pointer; }
+      .fr-rich-photo-actions { position: absolute; bottom: 10px; left: 10px; display: flex; gap: 6px; }
+      .fr-rich-photo-edit { width: 30px; height: 30px; border: none; border-radius: 50%; background: rgba(10,12,16,0.6); display: flex; align-items: center; justify-content: center; font-size: 13px; cursor: pointer; color: white; }
       .fr-rich-badge { position: absolute; bottom: 10px; right: 10px; background: rgba(10,12,16,0.68); color: #FFD65C; font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 13px; padding: 4px 10px; border-radius: 999px; }
       .fr-rich-body { padding: 14px; display: flex; flex-direction: column; gap: 6px; }
       .fr-rich-title { font-family: 'Fredoka', sans-serif; font-size: 16px; color: #6B4E9A; }
@@ -1689,6 +1842,7 @@ function StyleBlock() {
       /* ---- Confetti ---- */
       .fr-confetti { position: fixed; inset: 0; pointer-events: none; z-index: 70; overflow: hidden; }
       .fr-confetti-piece { position: absolute; top: -20px; border-radius: 2px; opacity: 0.9; animation-name: fr-fall; animation-timing-function: ease-in; animation-fill-mode: forwards; }
+      .fr-confetti-emoji { position: absolute; top: -30px; line-height: 1; animation-name: fr-fall; animation-timing-function: ease-in; animation-fill-mode: forwards; will-change: transform; }
       @keyframes fr-fall {
         0% { transform: translateY(-20px) rotate(0deg); opacity: 1; }
         100% { transform: translateY(105vh) rotate(540deg); opacity: 0.9; }
@@ -1713,6 +1867,9 @@ function StyleBlock() {
       .fr-color-swatches { display: flex; flex-wrap: wrap; gap: 10px; }
       .fr-swatch { width: 38px; height: 38px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 0 2px #E9E0FF; cursor: pointer; }
       .fr-swatch-active { box-shadow: 0 0 0 3px #6B4E9A; }
+      .fr-theme-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+      .fr-theme-chip { border: 2px solid var(--child-color); background: white; color: #6B4E9A; border-radius: 999px; padding: 9px 16px; font-size: 14px; cursor: pointer; font-family: 'Fredoka', sans-serif; font-weight: 600; }
+      .fr-theme-chip-active { background: var(--child-color); color: white; }
     `}</style>
   );
 }
