@@ -37,6 +37,64 @@ const ACHIEVEMENTS = [
   { id: "coins100", name: "Tesoro", icon: "💰", desc: "100 monedas ganadas", check: (s) => s.totalEarned >= 100 },
 ];
 
+// Themed names + icons for the same milestones, by profile theme.
+const ACHIEVEMENT_SKINS = {
+  football: {
+    first: { name: "Primer gol", icon: "⚽" },
+    streak3: { name: "Hat-trick", icon: "🎩" },
+    week: { name: "Semana invicta", icon: "🧤" },
+    streak14: { name: "Botas de oro", icon: "👟" },
+    month: { name: "Campeón de liga", icon: "🏆" },
+    tasks10: { name: "Goleador", icon: "🥅" },
+    tasks50: { name: "Pichichi", icon: "🥇" },
+    tasks100: { name: "Leyenda del estadio", icon: "🏟️" },
+    coins50: { name: "Fichaje estrella", icon: "💰" },
+    coins100: { name: "Balón de Oro", icon: "💎" },
+  },
+  cars: {
+    first: { name: "Primera vuelta", icon: "🚗" },
+    streak3: { name: "Calentando motores", icon: "🛞" },
+    week: { name: "Repostaje completo", icon: "⛽" },
+    streak14: { name: "Vuelta rápida", icon: "🏁" },
+    month: { name: "Campeón del mundo", icon: "🏆" },
+    tasks10: { name: "Pole position", icon: "🚦" },
+    tasks50: { name: "Piloto estrella", icon: "🏎️" },
+    tasks100: { name: "Leyenda de la pista", icon: "🏆" },
+    coins50: { name: "Boxes de oro", icon: "🔧" },
+    coins100: { name: "Gran Premio", icon: "💎" },
+  },
+  princess: {
+    first: { name: "Primera corona", icon: "👑" },
+    streak3: { name: "Damita real", icon: "🌷" },
+    week: { name: "Baile de palacio", icon: "💃" },
+    streak14: { name: "Joya de la corona", icon: "💍" },
+    month: { name: "Reina del castillo", icon: "🏰" },
+    tasks10: { name: "Princesa aplicada", icon: "🎀" },
+    tasks50: { name: "Vestido de gala", icon: "👗" },
+    tasks100: { name: "Corona de diamantes", icon: "👑" },
+    coins50: { name: "Cofre real", icon: "💎" },
+    coins100: { name: "Tesoro del reino", icon: "🏰" },
+  },
+  unicorn: {
+    first: { name: "Primer destello", icon: "🦄" },
+    streak3: { name: "Salto de arcoíris", icon: "🌈" },
+    week: { name: "Semana mágica", icon: "✨" },
+    streak14: { name: "Polvo de estrellas", icon: "⭐" },
+    month: { name: "Guardián mágico", icon: "🏰" },
+    tasks10: { name: "Corazón brillante", icon: "💖" },
+    tasks50: { name: "Estrella mágica", icon: "🌟" },
+    tasks100: { name: "Unicornio legendario", icon: "🦄" },
+    coins50: { name: "Cristal mágico", icon: "💎" },
+    coins100: { name: "Corona encantada", icon: "👑" },
+  },
+};
+
+function achievementInfo(id, theme) {
+  const base = ACHIEVEMENTS.find((a) => a.id === id) || { name: "", icon: "🏅", desc: "" };
+  const skin = (ACHIEVEMENT_SKINS[theme] || {})[id];
+  return { name: (skin && skin.name) || base.name, icon: (skin && skin.icon) || base.icon, desc: base.desc };
+}
+
 const CHILD_COLORS = ["#FF6FA5", "#4FC3E8", "#6FCF97", "#FFC93C"];
 const CHILD_EMOJIS = ["🦄", "🐼", "🦊", "🐸", "🐵", "🐧"];
 const WEEKDAY_LABELS = ["L", "M", "X", "J", "V", "S", "D"];
@@ -434,12 +492,8 @@ export default function FamilyRewardsApp() {
             hydratePhotos(parsed, mediaRef.current.byId);
             setData(parsed);
             setActiveChildId((prev) => prev || parsed.children[0]?.id || null);
-          } catch (e) {
-            console.error("Estado corrupto", e);
-          }
-        } else {
-          setData(null);
-        }
+          } catch (e) { console.error("Estado corrupto", e); }
+        } else { setData(null); }
         setReady(true);
       },
       (err) => { console.error("Error de Realtime Database:", err); setReady(true); }
@@ -455,9 +509,7 @@ export default function FamilyRewardsApp() {
       dehydratePhotos(clone, mediaRef.current, mediaUpdates);
       const updates = { state: JSON.stringify(clone), updatedAt: Date.now(), ...mediaUpdates };
       await update(ref(db, "families/" + FAMILY_ID), updates);
-    } catch (e) {
-      console.error("No se pudo guardar", e);
-    }
+    } catch (e) { console.error("No se pudo guardar", e); }
   }, []);
 
   function showLocalNotification(body) {
@@ -475,11 +527,7 @@ export default function FamilyRewardsApp() {
       return;
     }
     Notification.requestPermission().then((perm) => {
-      if (perm === "granted") {
-        localStorage.setItem("fr-notify", "1");
-        setNotifyOn(true);
-        showLocalNotification("Notificaciones activadas en este dispositivo");
-      }
+      if (perm === "granted") { localStorage.setItem("fr-notify", "1"); setNotifyOn(true); showLocalNotification("Notificaciones activadas en este dispositivo"); }
     });
   }
 
@@ -619,7 +667,8 @@ export default function FamilyRewardsApp() {
         const newly = nowEarned.filter((id) => !already.includes(id));
         next.achievements[childId] = nowEarned;
         if (newly.length) {
-          const medal = ACHIEVEMENTS.find((a) => a.id === newly[newly.length - 1]);
+          const child = next.children.find((c) => c.id === childId);
+          const medal = achievementInfo(newly[newly.length - 1], themeOf(child));
           events.push({ id: uid(), kind: "badge", badge: { name: medal.name, icon: medal.icon } });
         }
 
@@ -1412,11 +1461,12 @@ function ProgressView({ child, streak, milestone, earnedAch, stats, tasks, logs,
         <div className="fr-badge-shelf">
           {ACHIEVEMENTS.map((a) => {
             const unlocked = earnedAch.includes(a.id);
+            const info = achievementInfo(a.id, themeOf(child));
             return (
-              <div key={a.id} className={"fr-badge" + (unlocked ? " fr-badge-unlocked" : "")} title={a.desc}>
-                <div className="fr-badge-icon">{unlocked ? a.icon : "🔒"}</div>
-                <div className="fr-badge-name">{a.name}</div>
-                <div className="fr-badge-days">{a.desc}</div>
+              <div key={a.id} className={"fr-badge" + (unlocked ? " fr-badge-unlocked" : "")} title={info.desc}>
+                <div className="fr-badge-icon">{unlocked ? info.icon : "🔒"}</div>
+                <div className="fr-badge-name">{info.name}</div>
+                <div className="fr-badge-days">{info.desc}</div>
               </div>
             );
           })}
