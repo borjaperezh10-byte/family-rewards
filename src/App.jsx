@@ -485,11 +485,57 @@ export default function FamilyRewardsApp() {
   const [editingFamilyName, setEditingFamilyName] = useState(false);
   const [familyNameDraft, setFamilyNameDraft] = useState("");
   const [burst, setBurst] = useState(false);
-  const [notifyOn, setNotifyOn] = useState(typeof window !== "undefined" && localStorage.getItem("fr-notify") === "1");
-  const mediaRef = useRef({ byId: {}, byData: {} });
-  const lastEventTsRef = useRef(null);
   const [showLedger, setShowLedger] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [notifyOn, setNotifyOn] = useState(typeof window !== "undefined" && (() => { try { return localStorage.getItem("fr-notify") === "1"; } catch (e) { return false; } })());
+  const lastEventTsRef = useRef(null);
+  const mediaRef = useRef({ byId: {}, byData: {} });
+
+  function showLocalNotification(body) {
+    if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") return;
+    try {
+      if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+        navigator.serviceWorker.ready.then((reg) => reg.showNotification("Family Rewards", { body, icon: APP_ICON }));
+      } else {
+        new Notification("Family Rewards", { body, icon: APP_ICON });
+      }
+    } catch (e) { console.error(e); }
+  }
+
+  function enableNotifications() {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      alert("Este dispositivo no admite notificaciones. En iPhone/iPad recuerda añadir la app a la pantalla de inicio primero.");
+      return;
+    }
+    Notification.requestPermission().then((perm) => {
+      if (perm === "granted") {
+        try { localStorage.setItem("fr-notify", "1"); } catch (e) {}
+        setNotifyOn(true);
+        showLocalNotification("Notificaciones activadas en este dispositivo");
+      } else {
+        alert("El navegador no ha concedido permiso para los avisos. Revisa los ajustes de notificaciones.");
+      }
+    });
+  }
+
+  function toggleNotifications() {
+    if (notifyOn) {
+      try { localStorage.removeItem("fr-notify"); } catch (e) {}
+      setNotifyOn(false);
+    } else {
+      enableNotifications();
+    }
+  }
+
+  useEffect(() => {
+    if (!data || !data.lastEvent) return;
+    const ev = data.lastEvent;
+    if (lastEventTsRef.current === null) { lastEventTsRef.current = ev.ts; return; }
+    if (ev.ts > lastEventTsRef.current) {
+      lastEventTsRef.current = ev.ts;
+      if (ev.by !== DEVICE_ID && localStorage.getItem("fr-notify") === "1") showLocalNotification(ev.text);
+    }
+  }, [data]);
   const [burstTheme, setBurstTheme] = useState("default");
   const [burstEmojis, setBurstEmojis] = useState(null);
   const [celebQueue, setCelebQueue] = useState([]);
@@ -538,35 +584,6 @@ export default function FamilyRewardsApp() {
       await update(ref(db, "families/" + FAMILY_ID), updates);
     } catch (e) { console.error("No se pudo guardar", e); }
   }, []);
-
-  function showLocalNotification(body) {
-    if (!("Notification" in window) || Notification.permission !== "granted") return;
-    try {
-      if (navigator.serviceWorker && navigator.serviceWorker.ready) {
-        navigator.serviceWorker.ready.then((reg) => reg.showNotification("Family Rewards", { body, icon: APP_ICON }));
-      } else { new Notification("Family Rewards", { body, icon: APP_ICON }); }
-    } catch (e) { console.error(e); }
-  }
-
-  function enableNotifications() {
-    if (!("Notification" in window)) {
-      alert("Este dispositivo no admite notificaciones. En iPhone/iPad recuerda anadir la app a la pantalla de inicio primero.");
-      return;
-    }
-    Notification.requestPermission().then((perm) => {
-      if (perm === "granted") { localStorage.setItem("fr-notify", "1"); setNotifyOn(true); showLocalNotification("Notificaciones activadas en este dispositivo"); }
-    });
-  }
-
-  useEffect(() => {
-    if (!data || !data.lastEvent) return;
-    const ev = data.lastEvent;
-    if (lastEventTsRef.current === null) { lastEventTsRef.current = ev.ts; return; }
-    if (ev.ts > lastEventTsRef.current) {
-      lastEventTsRef.current = ev.ts;
-      if (ev.by !== DEVICE_ID && localStorage.getItem("fr-notify") === "1") { showLocalNotification(ev.text); }
-    }
-  }, [data]);
 
   // Load queued celebrations when someone opens a child's profile in kid mode.
   useEffect(() => {
@@ -848,6 +865,24 @@ export default function FamilyRewardsApp() {
     save(next);
   }
 
+  async function editTask(groupId, fields, photoFile, photoUrl) {
+    const next = structuredClone(data);
+    let photo;
+    if (photoUrl && photoUrl.trim()) photo = photoUrl.trim();
+    else if (photoFile) { try { photo = await fileToResizedDataUrl(photoFile); } catch (e) { console.error(e); } }
+    for (const t of next.tasks) {
+      if ((t.groupId || t.id) === groupId) {
+        if (fields.title != null) t.title = fields.title.trim();
+        if (fields.description != null) t.description = fields.description.trim();
+        if (fields.frequency != null) t.frequency = fields.frequency;
+        if (fields.kind != null) { t.kind = fields.kind; if (fields.kind === "family") t.points = 0; else if (fields.points != null) t.points = fields.points || 1; }
+        else if (fields.points != null) t.points = fields.points || 1;
+        if (photo !== undefined) t.photo = photo;
+      }
+    }
+    save(next);
+  }
+
   async function addChallenge(childIds, title, description, medalIcon, medalName, photoFile, photoUrl) {
     if (!title.trim()) return;
     const next = structuredClone(data);
@@ -1005,6 +1040,23 @@ export default function FamilyRewardsApp() {
     save(next);
   }
 
+  async function editReward(rewardId, fields, photoFile, photoUrl) {
+    const next = structuredClone(data);
+    let photo;
+    if (photoUrl && photoUrl.trim()) photo = photoUrl.trim();
+    else if (photoFile) { try { photo = await fileToResizedDataUrl(photoFile); } catch (e) { console.error(e); } }
+    const r = next.rewards.find((x) => x.id === rewardId);
+    if (r) {
+      if (fields.title != null) r.title = fields.title.trim();
+      if (fields.description != null) r.description = fields.description.trim();
+      if (fields.tag != null) r.tag = fields.tag.trim();
+      if (fields.cost != null) r.cost = Number(fields.cost) || r.cost;
+      if (fields.icon != null) r.icon = fields.icon || "🎁";
+      if (photo !== undefined) r.photo = photo;
+    }
+    save(next);
+  }
+
   function requestRedeem(childId, reward) {
     const bal = computeBalance(data, childId);
     if (bal.available < reward.cost) return;
@@ -1093,7 +1145,7 @@ export default function FamilyRewardsApp() {
   const tint = mode === "parent" ? "#FFF8EF" : ((activeChild.color || "#A78BFA") + "22");
 
   const kidSections = [["hoy", "Hoy"], ["pendientes", "Pendientes"], ["desafios", "Desafíos"], ["recompensas", "Recompensas"], ["progreso", "Mis medallas"]];
-  const parentSections = [["aprobaciones", "Aprobaciones"], ["tareas", "Tareas"], ["desafios", "Desafíos"], ["recompensas", "Recompensas"], ["progreso", "Progreso"], ["ajustes", "Ajustes"]];
+  const parentSections = [["aprobaciones", "Aprobaciones"], ["tareas", "Tareas"], ["desafios", "Desafíos"], ["recompensas", "Recompensas"], ["progreso", "Medallas"], ["ajustes", "Ajustes"]];
   const sections = mode === "kid" ? kidSections : parentSections;
   const currentTab = mode === "kid" ? kidTab : parentTab;
   const setTab = mode === "kid" ? setKidTab : setParentTab;
@@ -1180,6 +1232,10 @@ export default function FamilyRewardsApp() {
       )}
 
       <header className="fr-topbar">
+        <button className="fr-hamburger" onClick={() => setMenuOpen((o) => !o)} title="Menú">
+          <span className="fr-hamburger-icon">{menuOpen ? "✕" : "☰"}</span>
+          {mode === "parent" && approvalsPending > 0 && <span className="fr-tab-badge">{approvalsPending}</span>}
+        </button>
         <div className="fr-brand">
           <img src={APP_ICON} alt="" className="fr-brand-icon" />
           <div className="fr-brand-text">
@@ -1203,27 +1259,16 @@ export default function FamilyRewardsApp() {
             )}
           </div>
         </div>
-        <div className="fr-topbar-actions">
-          <button className="fr-hamburger" onClick={() => setMenuOpen((o) => !o)} title="Secciones">
-            <span className="fr-hamburger-label">{currentLabel}</span>
-            <span className="fr-hamburger-icon">{menuOpen ? "✕" : "☰"}</span>
-            {mode === "parent" && approvalsPending > 0 && <span className="fr-tab-badge">{approvalsPending}</span>}
-          </button>
-          {mode === "kid" ? (
-            <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={tryEnterParent}>Modo padres</button>
-          ) : (
-            <>
-              <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={enableNotifications} title="Activar avisos en este dispositivo">
-                {notifyOn ? "🔔 Avisos" : "🔕 Avisos"}
-              </button>
-              <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={() => setMode("kid")}>Salir</button>
-            </>
-          )}
-        </div>
       </header>
 
       {menuOpen && (
         <div className="fr-menu-dropdown">
+          {mode === "kid" ? (
+            <button className="fr-menu-item fr-menu-item-mode" onClick={() => { setMenuOpen(false); tryEnterParent(); }}>🔒 Modo padres</button>
+          ) : (
+            <button className="fr-menu-item fr-menu-item-mode" onClick={() => { setMenuOpen(false); setMode("kid"); }}>🚪 Salir del modo padres</button>
+          )}
+          <div className="fr-menu-sep" />
           {sections.map(([key, label]) => {
             const badge = (mode === "parent" && key === "aprobaciones") ? approvalsPending : 0;
             return (
@@ -1233,6 +1278,10 @@ export default function FamilyRewardsApp() {
               </button>
             );
           })}
+          <div className="fr-menu-sep" />
+          <button className="fr-menu-item" onClick={toggleNotifications}>
+            {notifyOn ? "🔔 Avisos activados (tocar para desactivar)" : "🔕 Activar avisos"}
+          </button>
         </div>
       )}
 
@@ -1316,7 +1365,7 @@ export default function FamilyRewardsApp() {
             )}
             {parentTab === "tareas" && (
               <TasksManager children={children} tasks={data.tasks.filter((t) => t.active)}
-                onAdd={addTask} onRemoveGroup={removeTaskGroup} onUpdatePhoto={updateTaskPhoto} onUpdatePhotoUrl={updateTaskPhotoUrl} onSetAssignment={setTaskAssignment} />
+                onAdd={addTask} onRemoveGroup={removeTaskGroup} onUpdatePhoto={updateTaskPhoto} onUpdatePhotoUrl={updateTaskPhotoUrl} onSetAssignment={setTaskAssignment} onEdit={editTask} />
             )}
             {parentTab === "desafios" && (
               <ChallengesManager children={children} challenges={(data.challenges || []).filter((c) => c.active)}
@@ -1325,7 +1374,7 @@ export default function FamilyRewardsApp() {
             {parentTab === "recompensas" && (
               <>
                 <ChildBar children={children} activeId={activeChild.id} onPick={setActiveChildId} />
-                <RewardsManager activeChild={activeChild} rewards={rewards} onAdd={(title, cost, icon, photoFile, description, tag, photoUrl) => addReward(activeChild.id, title, cost, icon, photoFile, description, tag, photoUrl)} onRemove={removeReward} onUpdatePhoto={updateRewardPhoto} onUpdatePhotoUrl={updateRewardPhotoUrl} redemptions={redemptions} />
+                <RewardsManager activeChild={activeChild} rewards={rewards} onAdd={(title, cost, icon, photoFile, description, tag, photoUrl) => addReward(activeChild.id, title, cost, icon, photoFile, description, tag, photoUrl)} onRemove={removeReward} onUpdatePhoto={updateRewardPhoto} onUpdatePhotoUrl={updateRewardPhotoUrl} redemptions={redemptions} onEdit={editReward} />
               </>
             )}
             {parentTab === "progreso" && (
@@ -1582,24 +1631,6 @@ function ProgressView({ child, streak, milestone, earnedAch, stats, tasks, logs,
         </section>
       )}
       <section className="fr-card">
-        <h2 className="fr-card-title" style={{ color: child.color }}>Camino de racha</h2>
-        <div className="fr-trail-path">
-          {Array.from({ length: stonesToShow }).map((_, i) => (
-            <div key={i} className="fr-stone fr-stone-filled" style={{ background: child.color }}>🐾</div>
-          ))}
-          {streak > 7 && <div className="fr-stone fr-stone-count">🔥 {streak}</div>}
-          {milestone && <div className="fr-stone fr-stone-milestone">{milestone.icon}</div>}
-        </div>
-        <p className="fr-trail-caption">
-          {streak === 0
-            ? "Completa todas las tareas de hoy para empezar la racha."
-            : milestone
-            ? `Racha actual: ${streak} día${streak === 1 ? "" : "s"}. Faltan ${milestone.days - streak} para "${milestone.name}".`
-            : `Racha actual: ${streak} días. ¡Racha máxima!`}
-        </p>
-      </section>
-
-      <section className="fr-card">
         <h2 className="fr-card-title" style={{ color: child.color }}>Medallas ({earnedCount}/{ACHIEVEMENTS.length})</h2>
         <div className="fr-badge-shelf">
           {ACHIEVEMENTS.map((a) => {
@@ -1752,7 +1783,7 @@ function ApprovalsPanel({ children, taskApprovals, redemptionApprovals, challeng
 }
 
 /* ---------------- Parent: Tasks manager ---------------- */
-function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, onUpdatePhotoUrl, onSetAssignment }) {
+function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, onUpdatePhotoUrl, onSetAssignment, onEdit }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [points, setPoints] = useState(1);
@@ -1766,6 +1797,7 @@ function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, on
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("reward"); // "reward" da monedas · "family" no
   const [assignIds, setAssignIds] = useState([]); // vacío = sin asignar
+  const [editGid, setEditGid] = useState(null);
   const themeColor = "#A78BFA";
   const nameOf = (id) => { const c = children.find((x) => x.id === id); return c ? c.name : "Sin asignar"; };
 
@@ -1787,12 +1819,30 @@ function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, on
     reader.readAsDataURL(file);
   }
 
+  function resetForm() {
+    setTitle(""); setDescription(""); setPoints(1); setFreqType("daily"); setWeekdays([]); setDate(""); setPhotoFile(null); setPhotoPreview(null); setPhotoUrl(""); setKind("reward"); setAssignIds([]); setShowForm(false); setEditGid(null);
+  }
+  function openCreate() { resetForm(); setShowForm(true); }
+  function openEdit(g) {
+    const t = g.rep;
+    setEditGid(g.gid); setTitle(t.title); setDescription(t.description || ""); setPoints(t.points || 1); setKind(t.kind === "family" ? "family" : "reward");
+    const f = t.frequency || { type: "daily" };
+    setFreqType(f.type || "daily"); setWeekdays(f.days || []); setDate(f.date || "");
+    setPhotoFile(null); setPhotoPreview(t.photo || null); setPhotoUrl(""); setAssignIds([...g.childIds]); setShowForm(true);
+  }
+
   function submit() {
     let frequency = { type: "daily" };
+    if (freqType === "once") frequency = { type: "once" };
     if (freqType === "weekly") frequency = { type: "weekly", days: weekdays };
     if (freqType === "date") frequency = { type: "date", date };
-    onAdd(assignIds, title, Number(points) || 1, frequency, photoFile, description, kind, photoUrl);
-    setTitle(""); setDescription(""); setPoints(1); setFreqType("daily"); setWeekdays([]); setDate(""); setPhotoFile(null); setPhotoPreview(null); setPhotoUrl(""); setKind("reward"); setAssignIds([]); setShowForm(false);
+    if (editGid) {
+      onEdit(editGid, { title, description, points: Number(points) || 1, kind, frequency }, photoFile, photoUrl);
+      onSetAssignment(editGid, assignIds);
+    } else {
+      onAdd(assignIds, title, Number(points) || 1, frequency, photoFile, description, kind, photoUrl);
+    }
+    resetForm();
   }
 
   const filtered = tasks.filter((t) => t.title.toLowerCase().includes(query.toLowerCase()));
@@ -1834,6 +1884,7 @@ function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, on
                 </div>
               </div>
               {g.childIds.length === 0 && <span className="fr-assign-hint">Sin asignar</span>}
+              <button className="fr-btn fr-btn-ghost fr-btn-small" style={{ marginTop: 6 }} onClick={() => openEdit(g)}>✏️ Editar</button>
             </RichItemCard>
           ))}
         </div>
@@ -1896,21 +1947,21 @@ function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, on
             <input type="date" className="fr-dark-input" value={date} onChange={(e) => setDate(e.target.value)} />
           )}
           <div className="fr-form-row" style={{ justifyContent: "flex-end" }}>
-            <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={() => setShowForm(false)}>Cancelar</button>
-            <button className="fr-btn fr-btn-primary" style={{ background: themeColor }} onClick={submit}>Añadir tarea</button>
+            <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={resetForm}>Cancelar</button>
+            <button className="fr-btn fr-btn-primary" style={{ background: themeColor }} onClick={submit}>{editGid ? "Guardar cambios" : "Añadir tarea"}</button>
           </div>
         </div>
       )}
 
-      <button className="fr-fab" style={{ background: themeColor }} onClick={() => setShowForm((s) => !s)} title="Añadir tarea">
-        {showForm ? "✕" : "+"}
-      </button>
+      {!showForm && (
+        <button className="fr-fab" style={{ background: themeColor }} onClick={openCreate} title="Añadir tarea">+</button>
+      )}
     </section>
   );
 }
 
 /* ---------------- Parent: Rewards manager ---------------- */
-function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, onUpdatePhotoUrl, redemptions }) {
+function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, onUpdatePhotoUrl, redemptions, onEdit }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [tag, setTag] = useState("");
@@ -1921,6 +1972,7 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
   const [photoUrl, setPhotoUrl] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [query, setQuery] = useState("");
+  const [editId, setEditId] = useState(null);
 
   const redeemCount = (rewardId) => (redemptions || []).filter((r) => r.rewardId === rewardId && r.status === "approved").length;
 
@@ -1933,9 +1985,22 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
     reader.readAsDataURL(file);
   }
 
+  function resetForm() {
+    setTitle(""); setDescription(""); setTag(""); setCost(5); setIcon("🎁"); setPhotoFile(null); setPhotoPreview(null); setPhotoUrl(""); setShowForm(false); setEditId(null);
+  }
+  function openCreate() { resetForm(); setShowForm(true); }
+  function openEdit(r) {
+    setEditId(r.id); setTitle(r.title); setDescription(r.description || ""); setTag(r.tag || ""); setCost(r.cost); setIcon(r.icon || "🎁");
+    setPhotoFile(null); setPhotoPreview(r.photo || null); setPhotoUrl(""); setShowForm(true);
+  }
+
   function submit() {
-    onAdd(title, cost, icon, photoFile, description, tag, photoUrl);
-    setTitle(""); setDescription(""); setTag(""); setCost(5); setIcon("🎁"); setPhotoFile(null); setPhotoPreview(null); setPhotoUrl(""); setShowForm(false);
+    if (editId) {
+      onEdit(editId, { title, description, tag, cost, icon }, photoFile, photoUrl);
+    } else {
+      onAdd(title, cost, icon, photoFile, description, tag, photoUrl);
+    }
+    resetForm();
   }
 
   const filtered = rewards.filter((r) => r.title.toLowerCase().includes(query.toLowerCase()));
@@ -1955,7 +2020,9 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
             return (
               <RichItemCard key={r.id} photo={r.photo} iconFallback={r.icon} colorFallback={activeChild.color}
                 pill={pill} badge={<>{r.cost} <Coin /></>} title={r.title} description={r.description}
-                onDelete={() => onRemove(r.id)} onPhotoPick={(f) => onUpdatePhoto(r.id, f)} onPhotoUrl={(u) => onUpdatePhotoUrl(r.id, u)} />
+                onDelete={() => onRemove(r.id)} onPhotoPick={(f) => onUpdatePhoto(r.id, f)} onPhotoUrl={(u) => onUpdatePhotoUrl(r.id, u)}>
+                <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={() => openEdit(r)}>✏️ Editar</button>
+              </RichItemCard>
             );
           })}
         </div>
@@ -1983,15 +2050,15 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
             <input className="fr-dark-input fr-dark-input-small" value={icon} onChange={(e) => setIcon(e.target.value)} />
           </div>
           <div className="fr-form-row" style={{ justifyContent: "flex-end" }}>
-            <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={() => setShowForm(false)}>Cancelar</button>
-            <button className="fr-btn fr-btn-primary" style={{ background: activeChild.color }} onClick={submit}>Añadir recompensa</button>
+            <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={resetForm}>Cancelar</button>
+            <button className="fr-btn fr-btn-primary" style={{ background: activeChild.color }} onClick={submit}>{editId ? "Guardar cambios" : "Añadir recompensa"}</button>
           </div>
         </div>
       )}
 
-      <button className="fr-fab" style={{ background: activeChild.color }} onClick={() => setShowForm((s) => !s)} title="Añadir recompensa">
-        {showForm ? "✕" : "+"}
-      </button>
+      {!showForm && (
+        <button className="fr-fab" style={{ background: activeChild.color }} onClick={openCreate} title="Añadir recompensa">+</button>
+      )}
     </section>
   );
 }
@@ -2409,16 +2476,17 @@ function StyleBlock() {
       @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito+Sans:wght@400;600;700&display=swap');
 
       .fr-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 10px 20px; }
-      .fr-topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+      .fr-topbar { display: flex; align-items: center; justify-content: flex-start; gap: 12px; flex-wrap: nowrap;
         width: calc(100% - 40px); max-width: 1120px; box-sizing: border-box;
-        margin: calc(env(safe-area-inset-top, 0px) + 14px) auto 12px auto; padding: 12px 18px; background: rgba(255,255,255,0.78);
+        margin: calc(env(safe-area-inset-top, 0px) + 14px) auto 12px auto; padding: 12px 16px; background: rgba(255,255,255,0.78);
         backdrop-filter: blur(6px); border-radius: 22px; box-shadow: 0 4px 16px rgba(107,78,154,0.12); }
-      .fr-topbar-actions { display: flex; gap: 8px; align-items: center; }
-      .fr-hamburger { position: relative; display: inline-flex; align-items: center; gap: 8px; border: 2px solid #E9E0FF; background: white; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 14px; padding: 8px 14px; border-radius: 999px; cursor: pointer; }
-      .fr-hamburger-icon { font-size: 16px; }
-      .fr-menu-dropdown { width: calc(100% - 40px); max-width: 1120px; margin: -4px auto 12px auto; background: white; border-radius: 18px; box-shadow: 0 10px 30px rgba(107,78,154,0.18); padding: 8px; display: flex; flex-direction: column; gap: 4px; }
-      .fr-menu-item { text-align: left; border: none; background: transparent; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 16px; padding: 12px 14px; border-radius: 12px; cursor: pointer; }
+      .fr-hamburger { position: relative; display: inline-flex; align-items: center; justify-content: center; border: 2px solid #E9E0FF; background: white; color: #6B4E9A; font-weight: 700; padding: 8px 12px; border-radius: 14px; cursor: pointer; flex: none; }
+      .fr-hamburger-icon { font-size: 20px; line-height: 1; }
+      .fr-menu-dropdown { width: calc(100% - 40px); max-width: 1120px; margin: -4px auto 12px auto; background: white; border-radius: 18px; box-shadow: 0 10px 30px rgba(107,78,154,0.18); padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+      .fr-menu-item { text-align: left; border: none; background: transparent; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 16px; padding: 13px 14px; border-radius: 12px; cursor: pointer; }
       .fr-menu-item-active { background: #F3EEFF; }
+      .fr-menu-item-mode { color: #8B5CF6; font-weight: 700; }
+      .fr-menu-sep { height: 2px; background: #1a1a1a; border-radius: 2px; margin: 6px 8px; }
       .fr-brand-text { display: flex; flex-direction: column; line-height: 1.1; }
       .fr-familyname-sub { font-size: 16px; color: #8A7BB0; font-family: 'Nunito Sans', sans-serif; font-weight: 700; display: inline-flex; align-items: center; gap: 8px; margin-top: 3px; }
       .fr-familyname-editbtn { background: none; border: none; color: #A78BFA; font-size: 12px; cursor: pointer; font-family: 'Nunito Sans', sans-serif; font-weight: 700; padding: 0; }
@@ -2454,10 +2522,11 @@ function StyleBlock() {
         font-size: 11px; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.15);
       }
       .fr-balance-bar {
-        margin: 0 20px 12px 20px; background: white; border: 3px solid; border-radius: 22px;
-        padding: 8px 14px; display: inline-flex; align-items: center; gap: 10px; width: fit-content; cursor: pointer;
-        font-family: 'Fredoka', sans-serif; box-shadow: 0 3px 0 rgba(0,0,0,0.05); text-align: left;
+        margin: 0 20px 12px 20px; max-width: calc(1120px - 40px); background: white; border: 3px solid; border-radius: 22px;
+        padding: 10px 18px; display: flex; align-items: center; justify-content: center; gap: 12px; width: calc(100% - 40px); cursor: pointer;
+        font-family: 'Fredoka', sans-serif; box-shadow: 0 3px 0 rgba(0,0,0,0.05); text-align: center; box-sizing: border-box;
       }
+      @media (min-width: 640px) { .fr-balance-bar { margin-left: auto; margin-right: auto; } }
       .fr-balance-star { font-size: 26px; display: inline-flex; }
       .fr-balance-num { font-size: 30px; font-weight: 700; color: #6B4E9A; line-height: 1; }
       .fr-balance-label { font-size: 12px; color: #A78BFA; font-family: 'Nunito Sans', sans-serif; font-weight: 700; line-height: 1.15; }
