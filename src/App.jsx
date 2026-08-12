@@ -442,10 +442,7 @@ export default function FamilyRewardsApp() {
         }
         setReady(true);
       },
-      (err) => {
-        console.error("Error de Realtime Database:", err);
-        setReady(true);
-      }
+      (err) => { console.error("Error de Realtime Database:", err); setReady(true); }
     );
     return () => unsub();
   }, []);
@@ -468,9 +465,7 @@ export default function FamilyRewardsApp() {
     try {
       if (navigator.serviceWorker && navigator.serviceWorker.ready) {
         navigator.serviceWorker.ready.then((reg) => reg.showNotification("Family Rewards", { body, icon: APP_ICON }));
-      } else {
-        new Notification("Family Rewards", { body, icon: APP_ICON });
-      }
+      } else { new Notification("Family Rewards", { body, icon: APP_ICON }); }
     } catch (e) { console.error(e); }
   }
 
@@ -494,9 +489,7 @@ export default function FamilyRewardsApp() {
     if (lastEventTsRef.current === null) { lastEventTsRef.current = ev.ts; return; }
     if (ev.ts > lastEventTsRef.current) {
       lastEventTsRef.current = ev.ts;
-      if (ev.by !== DEVICE_ID && localStorage.getItem("fr-notify") === "1") {
-        showLocalNotification(ev.text);
-      }
+      if (ev.by !== DEVICE_ID && localStorage.getItem("fr-notify") === "1") { showLocalNotification(ev.text); }
     }
   }, [data]);
 
@@ -702,7 +695,8 @@ export default function FamilyRewardsApp() {
     const isFamily = kind === "family";
     const ids = Array.isArray(childIds) ? childIds.filter(Boolean) : (childIds ? [childIds] : []);
     const targets = ids.length ? ids : [null];
-    const base = { title: title.trim(), points: isFamily ? 0 : (points || 1), kind: isFamily ? "family" : "reward", frequency, active: true, photo, description: (description || "").trim(), createdDate: todayKey(0) };
+    const groupId = uid();
+    const base = { groupId, title: title.trim(), points: isFamily ? 0 : (points || 1), kind: isFamily ? "family" : "reward", frequency, active: true, photo, description: (description || "").trim(), createdDate: todayKey(0) };
     for (const cid of targets) next.tasks.push({ id: uid(), childId: cid, ...base });
     const names = ids.map((id) => { const c = next.children.find((x) => x.id === id); return c ? c.name : ""; }).filter(Boolean);
     if (names.length) emit(next, `Nueva tarea para ${names.join(" y ")}: ${title.trim()} 📝`);
@@ -714,7 +708,10 @@ export default function FamilyRewardsApp() {
       const dataUrl = await fileToResizedDataUrl(file);
       const next = structuredClone(data);
       const task = next.tasks.find((t) => t.id === taskId);
-      if (task) task.photo = dataUrl;
+      if (task) {
+        const gid = task.groupId || task.id;
+        for (const t of next.tasks) if ((t.groupId || t.id) === gid) t.photo = dataUrl;
+      }
       save(next);
     } catch (e) {
       console.error("No se pudo actualizar la foto de la tarea", e);
@@ -725,7 +722,10 @@ export default function FamilyRewardsApp() {
     if (!url || !url.trim()) return;
     const next = structuredClone(data);
     const task = next.tasks.find((t) => t.id === taskId);
-    if (task) task.photo = url.trim();
+    if (task) {
+      const gid = task.groupId || task.id;
+      for (const t of next.tasks) if ((t.groupId || t.id) === gid) t.photo = url.trim();
+    }
     save(next);
   }
 
@@ -740,6 +740,34 @@ export default function FamilyRewardsApp() {
     const next = structuredClone(data);
     const t = next.tasks.find((x) => x.id === taskId);
     if (t) t.childId = childId || null;
+    save(next);
+  }
+
+  // Reconcile a task group so it is assigned to exactly the given set of children ([] = sin asignar).
+  function setTaskAssignment(groupId, childIds) {
+    const next = structuredClone(data);
+    const group = next.tasks.filter((t) => (t.groupId || t.id) === groupId);
+    if (!group.length) return;
+    const template = { ...group[0] };
+    const desired = (childIds && childIds.length) ? childIds : [null];
+    const existingByChild = {};
+    for (const t of group) if (t.active) existingByChild[t.childId || "null"] = t;
+    for (const t of group) t.active = false;
+    for (const cid of desired) {
+      const key = cid || "null";
+      if (existingByChild[key]) { existingByChild[key].active = true; existingByChild[key].childId = cid; }
+      else {
+        const inactive = group.find((t) => !t.active && (t.childId || "null") === key);
+        if (inactive) { inactive.active = true; inactive.childId = cid; }
+        else next.tasks.push({ ...template, id: uid(), groupId, childId: cid, active: true });
+      }
+    }
+    save(next);
+  }
+
+  function removeTaskGroup(groupId) {
+    const next = structuredClone(data);
+    for (const t of next.tasks) if ((t.groupId || t.id) === groupId) t.active = false;
     save(next);
   }
 
@@ -867,6 +895,14 @@ export default function FamilyRewardsApp() {
     } catch (e) {
       console.error("No se pudo actualizar la foto", e);
     }
+  }
+
+  function updateChildPhotoUrl(childId, url) {
+    if (!url || !url.trim()) return;
+    const next = structuredClone(data);
+    const child = next.children.find((c) => c.id === childId);
+    if (child) child.photo = url.trim();
+    save(next);
   }
 
   function saveFamilyName() {
@@ -1089,7 +1125,7 @@ export default function FamilyRewardsApp() {
             )}
             {parentTab === "tareas" && (
               <TasksManager children={children} tasks={data.tasks.filter((t) => t.active)}
-                onAdd={addTask} onRemove={removeTask} onUpdatePhoto={updateTaskPhoto} onUpdatePhotoUrl={updateTaskPhotoUrl} onReassign={reassignTask} />
+                onAdd={addTask} onRemoveGroup={removeTaskGroup} onUpdatePhoto={updateTaskPhoto} onUpdatePhotoUrl={updateTaskPhotoUrl} onSetAssignment={setTaskAssignment} />
             )}
             {parentTab === "desafios" && (
               <ChallengesManager children={children} challenges={(data.challenges || []).filter((c) => c.active)}
@@ -1110,7 +1146,7 @@ export default function FamilyRewardsApp() {
             {parentTab === "ajustes" && (
               <>
                 <ChildBar children={children} activeId={activeChild.id} onPick={setActiveChildId} />
-                <SettingsPanel settings={settings} onUpdate={updateSettings} children={children} activeChild={activeChild} onSetColor={setChildColor} onSetTheme={setChildTheme} parentTheme={data.parentTheme || "default"} onSetParentTheme={setParentTheme} />
+                <SettingsPanel settings={settings} onUpdate={updateSettings} children={children} activeChild={activeChild} onSetColor={setChildColor} onSetTheme={setChildTheme} parentTheme={data.parentTheme || "default"} onSetParentTheme={setParentTheme} onSetPhoto={updateChildPhoto} onSetPhotoUrl={updateChildPhotoUrl} />
               </>
             )}
           </main>
@@ -1523,7 +1559,7 @@ function ApprovalsPanel({ children, taskApprovals, redemptionApprovals, challeng
 }
 
 /* ---------------- Parent: Tasks manager ---------------- */
-function TasksManager({ children, tasks, onAdd, onRemove, onUpdatePhoto, onUpdatePhotoUrl, onReassign }) {
+function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, onUpdatePhotoUrl, onSetAssignment }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [points, setPoints] = useState(1);
@@ -1567,26 +1603,44 @@ function TasksManager({ children, tasks, onAdd, onRemove, onUpdatePhoto, onUpdat
   }
 
   const filtered = tasks.filter((t) => t.title.toLowerCase().includes(query.toLowerCase()));
+  // Group tasks so the same task assigned to several children shows as ONE card.
+  const groups = [];
+  const byId = {};
+  for (const t of filtered) {
+    const gid = t.groupId || t.id;
+    if (!byId[gid]) { byId[gid] = { gid, rep: t, childIds: [] }; groups.push(byId[gid]); }
+    if (t.childId) byId[gid].childIds.push(t.childId);
+  }
 
   return (
     <section className="fr-dark-surface">
       <h2 className="fr-dark-title">Tareas</h2>
       <SearchBar value={query} onChange={setQuery} placeholder="Buscar tareas..." />
       {tasks.length === 0 ? (
-        <p className="fr-dark-empty">Aún no hay tareas. Pulsa el botón + para crear la primera. Puedes asignarla a un niño o dejarla sin asignar para otra ocasión.</p>
+        <p className="fr-dark-empty">Aún no hay tareas. Pulsa el botón + para crear la primera. Puedes asignarla a un niño, a los dos, o dejarla sin asignar para otra ocasión.</p>
       ) : (
         <div className="fr-rich-grid">
-          {filtered.map((t) => (
-            <RichItemCard key={t.id} photo={t.photo} iconFallback={t.kind === "family" ? "🏠" : "✅"} colorFallback={themeColor}
-              pill={freqLabelShort(t)} badge={taskBadge(t)} title={t.title} description={t.description}
-              onDelete={() => onRemove(t.id)} onPhotoPick={(f) => onUpdatePhoto(t.id, f)} onPhotoUrl={(u) => onUpdatePhotoUrl(t.id, u)}>
+          {groups.map((g) => (
+            <RichItemCard key={g.gid} photo={g.rep.photo} iconFallback={g.rep.kind === "family" ? "🏠" : "✅"} colorFallback={themeColor}
+              pill={freqLabelShort(g.rep)} badge={taskBadge(g.rep)} title={g.rep.title} description={g.rep.description}
+              onDelete={() => onRemoveGroup(g.gid)} onPhotoPick={(f) => onUpdatePhoto(g.rep.id, f)} onPhotoUrl={(u) => onUpdatePhotoUrl(g.rep.id, u)}>
               <div className="fr-assign-row">
                 <span className="fr-assign-label">👤</span>
-                <select className="fr-assign-select" value={t.childId || ""} onChange={(e) => onReassign(t.id, e.target.value || null)}>
-                  <option value="">Sin asignar</option>
-                  {children.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                <div className="fr-assign-chips">
+                  {children.map((c) => (
+                    <button key={c.id} type="button"
+                      className={"fr-assign-chip" + (g.childIds.includes(c.id) ? " fr-assign-chip-active" : "")}
+                      style={{ "--child-color": c.color }}
+                      onClick={() => {
+                        const nextIds = g.childIds.includes(c.id) ? g.childIds.filter((x) => x !== c.id) : [...g.childIds, c.id];
+                        onSetAssignment(g.gid, nextIds);
+                      }}>
+                      {g.childIds.includes(c.id) ? "✓ " : ""}{c.name}
+                    </button>
+                  ))}
+                </div>
               </div>
+              {g.childIds.length === 0 && <span className="fr-assign-hint">Sin asignar</span>}
             </RichItemCard>
           ))}
         </div>
@@ -1750,9 +1804,22 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
 }
 
 /* ---------------- Parent: Settings ---------------- */
-function SettingsPanel({ settings, onUpdate, children, activeChild, onSetColor, onSetTheme, parentTheme, onSetParentTheme }) {
+function SettingsPanel({ settings, onUpdate, children, activeChild, onSetColor, onSetTheme, parentTheme, onSetParentTheme, onSetPhoto, onSetPhotoUrl }) {
   return (
     <>
+      <section className="fr-card">
+        <h2 className="fr-card-title">Foto de {activeChild.name}</h2>
+        <div className="fr-photo-edit-row">
+          <span className="fr-photo-edit-preview" style={activeChild.photo ? { backgroundImage: `url(${activeChild.photo})` } : { background: activeChild.color, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {!activeChild.photo && <span style={{ fontSize: 28 }}>{activeChild.emoji}</span>}
+          </span>
+          <label className="fr-btn fr-btn-small" style={{ background: activeChild.color, cursor: "pointer" }}>
+            📷 Subir foto
+            <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files[0]; if (f) onSetPhoto(activeChild.id, f); e.target.value = ""; }} />
+          </label>
+          <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={() => { const u = window.prompt("Pega la URL de la imagen (https://...)"); if (u) onSetPhotoUrl(activeChild.id, u); }}>🔗 Por URL</button>
+        </div>
+      </section>
       <section className="fr-card">
         <h2 className="fr-card-title">Fondo del modo padres</h2>
         <div className="fr-theme-grid">
@@ -2118,20 +2185,20 @@ function StyleBlock() {
       .fr-brand-mark { font-size: 28px; }
       .fr-brand-icon { width: 40px; height: 40px; border-radius: 11px; display: block; }
       .fr-brand-name { font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 24px; color: #A78BFA; letter-spacing: 0.3px; }
-      .fr-child-tabs { display: flex; gap: 8px; padding: 0 20px 12px 20px; flex-wrap: wrap; max-width: 1120px; margin: 0 auto; }
+      .fr-child-tabs { display: flex; gap: 8px; padding: 0 20px 12px 20px; flex-wrap: nowrap; max-width: 1120px; margin: 0 auto; }
       .fr-child-tab {
-        display: flex; align-items: center; gap: 12px; border: 3px solid var(--child-color, #A78BFA);
+        display: flex; align-items: center; gap: 9px; border: 3px solid var(--child-color, #A78BFA);
         background: white; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 600;
-        padding: 5px 22px 5px 5px; border-radius: 999px; cursor: pointer; font-size: 16px;
+        padding: 4px 16px 4px 4px; border-radius: 999px; cursor: pointer; font-size: 15px; flex: 0 1 auto; min-width: 0;
         box-shadow: 0 3px 0 var(--child-color, #A78BFA);
       }
       .fr-child-tab-active { background: var(--child-color, #A78BFA); color: white; }
       .fr-child-emoji { font-size: 26px; margin-left: 12px; }
-      .fr-child-tab-wrap { position: relative; display: inline-flex; }
-      .fr-avatar-ring { width: 66px; height: 66px; border-radius: 50%; padding: 4px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; flex: none; }
+      .fr-child-tab-wrap { position: relative; display: inline-flex; min-width: 0; }
+      .fr-avatar-ring { width: 56px; height: 56px; border-radius: 50%; padding: 3px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; flex: none; }
       .fr-child-avatar { width: 100%; height: 100%; border-radius: 50%; background-size: cover; background-position: center; display: block; border: 2px solid white; box-sizing: border-box; }
-      .fr-child-avatar-emoji { display: flex; align-items: center; justify-content: center; background: #F3EEFF; font-size: 30px; }
-      .fr-child-tab-name { white-space: nowrap; }
+      .fr-child-avatar-emoji { display: flex; align-items: center; justify-content: center; background: #F3EEFF; font-size: 26px; }
+      .fr-child-tab-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .fr-photo-edit {
         position: absolute; bottom: -6px; right: -6px; width: 22px; height: 22px; border-radius: 50%;
         background: white; border: 2px solid #A78BFA; display: flex; align-items: center; justify-content: center;
@@ -2351,6 +2418,8 @@ function StyleBlock() {
       .fr-assign-chip { border: 2px solid var(--child-color, #A78BFA); background: white; color: #6B4E9A; border-radius: 999px; padding: 7px 14px; font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 13px; cursor: pointer; }
       .fr-assign-chip-active { background: var(--child-color, #A78BFA); color: white; }
       .fr-assign-hint { font-size: 12px; color: #A99BC7; }
+      .fr-photo-edit-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+      .fr-photo-edit-preview { width: 64px; height: 64px; border-radius: 50%; background-size: cover; background-position: center; flex: none; border: 3px solid #F3EEFF; }
     `}</style>
   );
 }
