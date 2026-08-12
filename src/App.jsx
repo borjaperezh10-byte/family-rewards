@@ -200,6 +200,7 @@ function fileToResizedDataUrl(file, maxSize = 220, quality = 0.82) {
 function isTaskDueOn(task, dateKey) {
   const f = task.frequency || { type: "daily" };
   if (f.type === "daily") return true;
+  if (f.type === "once") return dateKey >= (task.createdDate || dateKey); // única: vigente hasta completarse (se desactiva al aprobar)
   if (f.type === "weekly") return (f.days || []).includes(dayOfWeek(dateKey));
   if (f.type === "date") return f.date === dateKey;
   return true;
@@ -296,6 +297,30 @@ function computeMissed(data, childId, today) {
 
 function bonusCoins(data, childId) {
   return (data.bonuses || []).filter((b) => b.childId === childId).reduce((s, b) => s + (b.coins || 0), 0);
+}
+
+function coinMovements(data, childId) {
+  const moves = [];
+  const tsToDate = (ts) => { try { return new Date(ts).toISOString().slice(0, 10); } catch (e) { return ""; } };
+  for (const [dateKey, dayLog] of Object.entries(data.logs || {})) {
+    for (const [taskId, status] of Object.entries(dayLog)) {
+      if (status === "approved") {
+        const task = (data.tasks || []).find((t) => t.id === taskId);
+        if (task && task.childId === childId) {
+          const pts = task.points ?? 1;
+          if (pts > 0) moves.push({ date: dateKey, amount: pts, sign: 1, label: `Tarea: ${task.title}` });
+        }
+      }
+    }
+  }
+  for (const b of (data.bonuses || [])) {
+    if (b.childId === childId) moves.push({ date: tsToDate(b.ts), amount: b.coins || 0, sign: 1, label: "Sorpresa 🎁" });
+  }
+  for (const r of (data.redemptions || [])) {
+    if (r.childId === childId && r.status === "approved") moves.push({ date: r.dateDecided || r.dateRequested, amount: r.cost, sign: -1, label: `Recompensa: ${r.rewardTitle}` });
+  }
+  moves.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  return moves;
 }
 
 function computeBalance(data, childId) {
@@ -463,6 +488,8 @@ export default function FamilyRewardsApp() {
   const [notifyOn, setNotifyOn] = useState(typeof window !== "undefined" && localStorage.getItem("fr-notify") === "1");
   const mediaRef = useRef({ byId: {}, byData: {} });
   const lastEventTsRef = useRef(null);
+  const [showLedger, setShowLedger] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [burstTheme, setBurstTheme] = useState("default");
   const [burstEmojis, setBurstEmojis] = useState(null);
   const [celebQueue, setCelebQueue] = useState([]);
@@ -640,6 +667,7 @@ export default function FamilyRewardsApp() {
     if (decision === "approved") {
       const task = next.tasks.find((t) => t.id === taskId);
       if (task) {
+        if (task.frequency && task.frequency.type === "once") task.active = false; // tarea única: se cierra al aprobar
         const childId = task.childId;
         const graceDays = (next.settings && next.settings.graceDays) || 0;
         const tasksForChild = next.tasks.filter((t) => t.childId === childId && t.active);
@@ -820,15 +848,82 @@ export default function FamilyRewardsApp() {
     save(next);
   }
 
-  async function addChallenge(childId, title, description, medalIcon, medalName, photoFile, photoUrl) {
+  async function addChallenge(childIds, title, description, medalIcon, medalName, photoFile, photoUrl) {
     if (!title.trim()) return;
     const next = structuredClone(data);
     if (!next.challenges) next.challenges = [];
     let photo = null;
     if (photoUrl && photoUrl.trim()) photo = photoUrl.trim();
     else if (photoFile) { try { photo = await fileToResizedDataUrl(photoFile); } catch (e) { console.error(e); } }
-    next.challenges.push({ id: uid(), childId: childId || null, title: title.trim(), description: (description || "").trim(), photo, medalIcon: medalIcon || "🏅", medalName: (medalName || "Medalla especial").trim(), status: "open", active: true, createdDate: todayKey(0) });
-    if (childId) { const ch = next.children.find((c) => c.id === childId); emit(next, `Nuevo desafío para ${ch ? ch.name : ""}: ${title.trim()} 🏅`); }
+    const ids = Array.isArray(childIds) ? childIds.filter(Boolean) : (childIds ? [childIds] : []);
+    const targets = ids.length ? ids : [null];
+    const groupId = uid();
+    const base = { groupId, title: title.trim(), description: (description || "").trim(), photo, medalIcon: medalIcon || "🏅", medalName: (medalName || "Medalla especial").trim(), status: "open", active: true, createdDate: todayKey(0) };
+    for (const cid of targets) next.challenges.push({ id: uid(), childId: cid, ...base });
+    const names = ids.map((id) => { const c = next.children.find((x) => x.id === id); return c ? c.name : ""; }).filter(Boolean);
+    if (names.length) emit(next, `Nuevo desafío para ${names.join(" y ")}: ${title.trim()} 🏅`);
+    save(next);
+  }
+
+  async function editChallenge(groupId, fields, photoFile, photoUrl, childIds) {
+    const next = structuredClone(data);
+    let photo;
+    if (photoUrl && photoUrl.trim()) photo = photoUrl.trim();
+    else if (photoFile) { try { photo = await fileToResizedDataUrl(photoFile); } catch (e) { console.error(e); } }
+    for (const c of next.challenges) {
+      if ((c.groupId || c.id) === groupId) {
+        if (fields.title != null) c.title = fields.title.trim();
+        if (fields.description != null) c.description = fields.description.trim();
+        if (fields.medalIcon != null) c.medalIcon = fields.medalIcon || "🏅";
+        if (fields.medalName != null) c.medalName = (fields.medalName || "Medalla especial").trim();
+        if (photo !== undefined) c.photo = photo;
+      }
+    }
+    // reconcile assignment in the same save
+    if (childIds) {
+      const group = next.challenges.filter((c) => (c.groupId || c.id) === groupId);
+      const template = { ...group[0] };
+      const desired = childIds.length ? childIds : [null];
+      const activeByChild = {};
+      for (const c of group) if (c.active) activeByChild[c.childId || "null"] = c;
+      for (const c of group) c.active = false;
+      for (const cid of desired) {
+        const key = cid || "null";
+        if (activeByChild[key]) { activeByChild[key].active = true; activeByChild[key].childId = cid; }
+        else {
+          const inactive = group.find((c) => !c.active && (c.childId || "null") === key);
+          if (inactive) { inactive.active = true; inactive.childId = cid; }
+          else next.challenges.push({ ...template, id: uid(), groupId, childId: cid, active: true, status: "open" });
+        }
+      }
+    }
+    save(next);
+  }
+
+  function setChallengeAssignment(groupId, childIds) {
+    const next = structuredClone(data);
+    const group = next.challenges.filter((c) => (c.groupId || c.id) === groupId);
+    if (!group.length) return;
+    const template = { ...group[0] };
+    const desired = (childIds && childIds.length) ? childIds : [null];
+    const activeByChild = {};
+    for (const c of group) if (c.active) activeByChild[c.childId || "null"] = c;
+    for (const c of group) c.active = false;
+    for (const cid of desired) {
+      const key = cid || "null";
+      if (activeByChild[key]) { activeByChild[key].active = true; activeByChild[key].childId = cid; }
+      else {
+        const inactive = group.find((c) => !c.active && (c.childId || "null") === key);
+        if (inactive) { inactive.active = true; inactive.childId = cid; }
+        else next.challenges.push({ ...template, id: uid(), groupId, childId: cid, active: true, status: "open" });
+      }
+    }
+    save(next);
+  }
+
+  function removeChallengeGroup(groupId) {
+    const next = structuredClone(data);
+    for (const c of next.challenges) if ((c.groupId || c.id) === groupId) c.active = false;
     save(next);
   }
 
@@ -997,11 +1092,45 @@ export default function FamilyRewardsApp() {
   const bgUsesImage = bgTheme !== "default";
   const tint = mode === "parent" ? "#FFF8EF" : ((activeChild.color || "#A78BFA") + "22");
 
+  const kidSections = [["hoy", "Hoy"], ["pendientes", "Pendientes"], ["desafios", "Desafíos"], ["recompensas", "Recompensas"], ["progreso", "Mis medallas"]];
+  const parentSections = [["aprobaciones", "Aprobaciones"], ["tareas", "Tareas"], ["desafios", "Desafíos"], ["recompensas", "Recompensas"], ["progreso", "Progreso"], ["ajustes", "Ajustes"]];
+  const sections = mode === "kid" ? kidSections : parentSections;
+  const currentTab = mode === "kid" ? kidTab : parentTab;
+  const setTab = mode === "kid" ? setKidTab : setParentTab;
+  const currentLabel = (sections.find(([k]) => k === currentTab) || sections[0])[1];
+  const approvalsPending = pendingTaskApprovals().length + redemptions.filter((r) => r.status === "pending").length + (data.challenges || []).filter((c) => c.active && c.status === "pending").length;
+
   return (
     <div style={{ ...styles.appBg, background: "transparent", position: "relative" }}>
       <div className={"fr-bg-layer" + (bgUsesImage ? " fr-bg-" + bgTheme : "")} style={bgUsesImage ? undefined : { background: tint }} />
       <StyleBlock />
       {burst && <Confetti theme={burstTheme} emojis={burstEmojis} />}
+      {showLedger && (
+        <div className="fr-celebration" onClick={() => setShowLedger(false)}>
+          <div className="fr-ledger-card" onClick={(e) => e.stopPropagation()}>
+            <div className="fr-ledger-head">
+              <span>Movimientos de {activeChild.name}</span>
+              <button className="fr-mini-btn fr-mini-btn-ghost" onClick={() => setShowLedger(false)}>✕</button>
+            </div>
+            <div className="fr-ledger-total"><Coin lg /> {balance.available} monedas disponibles</div>
+            <div className="fr-ledger-list">
+              {coinMovements(data, activeChild.id).length === 0 ? (
+                <p className="fr-empty">Todavía no hay movimientos.</p>
+              ) : (
+                coinMovements(data, activeChild.id).map((m, i) => (
+                  <div key={i} className="fr-ledger-item">
+                    <span>
+                      <span className="fr-ledger-label">{m.label}</span>
+                      <br /><span className="fr-ledger-date">{m.date}</span>
+                    </span>
+                    <span className={m.sign > 0 ? "fr-ledger-plus" : "fr-ledger-minus"}>{m.sign > 0 ? "+" : "−"}{m.amount} 🪙</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {celebration && (
         <div className="fr-celebration">
           <div className="fr-celebration-card">
@@ -1075,6 +1204,11 @@ export default function FamilyRewardsApp() {
           </div>
         </div>
         <div className="fr-topbar-actions">
+          <button className="fr-hamburger" onClick={() => setMenuOpen((o) => !o)} title="Secciones">
+            <span className="fr-hamburger-label">{currentLabel}</span>
+            <span className="fr-hamburger-icon">{menuOpen ? "✕" : "☰"}</span>
+            {mode === "parent" && approvalsPending > 0 && <span className="fr-tab-badge">{approvalsPending}</span>}
+          </button>
           {mode === "kid" ? (
             <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={tryEnterParent}>Modo padres</button>
           ) : (
@@ -1087,6 +1221,20 @@ export default function FamilyRewardsApp() {
           )}
         </div>
       </header>
+
+      {menuOpen && (
+        <div className="fr-menu-dropdown">
+          {sections.map(([key, label]) => {
+            const badge = (mode === "parent" && key === "aprobaciones") ? approvalsPending : 0;
+            return (
+              <button key={key} className={"fr-menu-item" + (currentTab === key ? " fr-menu-item-active" : "")}
+                onClick={() => { setTab(key); setMenuOpen(false); }}>
+                {label}{badge > 0 ? <span className="fr-tab-badge">{badge}</span> : null}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {mode === "kid" && (
         <nav className="fr-child-tabs">
@@ -1119,16 +1267,17 @@ export default function FamilyRewardsApp() {
               <button className="fr-praise-close" onClick={dismissPraise}>✕</button>
             </div>
           )}
-          <div className="fr-balance-bar" style={{ borderColor: activeChild.color }}>
+          <button className="fr-balance-bar" style={{ borderColor: activeChild.color }} onClick={() => setShowLedger(true)} title="Ver movimientos">
             <span className="fr-balance-star"><Coin lg /></span>
             <span className="fr-balance-num">{balance.available}</span>
-            <span className="fr-balance-label">monedas disponibles</span>
+            <span className="fr-balance-label">monedas<br />disponibles</span>
             {balance.penaltyCoins > 0 && (
               <span className="fr-balance-penalty" title={`${balance.missedCount} tarea(s) sin hacer`}>−{balance.penaltyCoins} <Coin /></span>
             )}
-          </div>
-          <nav className="fr-subtabs">
-            {[["hoy", "Hoy"], ["pendientes", "Pendientes"], ["desafios", "Desafíos"], ["recompensas", "Recompensas"], ["progreso", "Mi progreso"]].map(([key, label]) => (
+            <span className="fr-balance-chevron">›</span>
+          </button>
+          <nav className="fr-subtabs" style={{ display: "none" }}>
+            {kidSections.map(([key, label]) => (
               <button key={key} className={"fr-subtab" + (kidTab === key ? " fr-subtab-active" : "")}
                 style={{ "--child-color": activeChild.color }} onClick={() => setKidTab(key)}>{label}</button>
             ))}
@@ -1153,17 +1302,10 @@ export default function FamilyRewardsApp() {
         </div>
       ) : (
         <>
-          <nav className="fr-subtabs">
-            {[["aprobaciones", "Aprobaciones"], ["tareas", "Tareas"], ["desafios", "Desafíos"], ["recompensas", "Recompensas"], ["progreso", "Progreso"], ["ajustes", "Ajustes"]].map(([key, label]) => {
-              const pendingCount = key === "aprobaciones"
-                ? (pendingTaskApprovals().length + redemptions.filter((r) => r.status === "pending").length + (data.challenges || []).filter((c) => c.active && c.status === "pending").length)
-                : 0;
-              return (
-                <button key={key} className={"fr-subtab" + (parentTab === key ? " fr-subtab-active" : "")} onClick={() => setParentTab(key)}>
-                  {label}{pendingCount > 0 ? <span className="fr-tab-badge">{pendingCount}</span> : null}
-                </button>
-              );
-            })}
+          <nav className="fr-subtabs" style={{ display: "none" }}>
+            {parentSections.map(([key, label]) => (
+              <button key={key} className={"fr-subtab" + (parentTab === key ? " fr-subtab-active" : "")} onClick={() => setParentTab(key)}>{label}</button>
+            ))}
           </nav>
           <main className="fr-main">
             {parentTab === "aprobaciones" && (
@@ -1178,7 +1320,7 @@ export default function FamilyRewardsApp() {
             )}
             {parentTab === "desafios" && (
               <ChallengesManager children={children} challenges={(data.challenges || []).filter((c) => c.active)}
-                onAdd={addChallenge} onRemove={removeChallenge} onDecide={decideChallenge} />
+                onAdd={addChallenge} onRemoveGroup={removeChallengeGroup} onDecide={decideChallenge} onSetAssignment={setChallengeAssignment} onEdit={editChallenge} />
             )}
             {parentTab === "recompensas" && (
               <>
@@ -1258,6 +1400,7 @@ function SearchBar({ value, onChange, placeholder }) {
 function freqLabelShort(t) {
   const f = t.frequency || { type: "daily" };
   if (f.type === "daily") return "Cada día";
+  if (f.type === "once") return "Única";
   if (f.type === "weekly") return (f.days || []).map((d) => WEEKDAY_LABELS[d === 0 ? 6 : d - 1]).join("·");
   if (f.type === "date") return f.date;
   return "";
@@ -1735,7 +1878,7 @@ function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, on
             </div>
           )}
           <div className="fr-freq-toggle">
-            {[["daily", "Diaria"], ["weekly", "Días de la semana"], ["date", "Fecha concreta"]].map(([key, label]) => (
+            {[["daily", "Diaria"], ["once", "Única"], ["weekly", "Días de la semana"], ["date", "Fecha concreta"]].map(([key, label]) => (
               <button key={key} className={"fr-dark-chip" + (freqType === key ? " fr-dark-chip-active" : "")} style={{ "--child-color": themeColor }} onClick={() => setFreqType(key)}>{label}</button>
             ))}
           </div>
@@ -1971,19 +2114,29 @@ function ChallengesView({ child, challenges, onDone, specialMedals }) {
   );
 }
 
-function ChallengesManager({ children, challenges, onAdd, onRemove, onDecide }) {
+function ChallengesManager({ children, challenges, onAdd, onRemoveGroup, onDecide, onSetAssignment, onEdit }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [medalName, setMedalName] = useState("Medalla especial");
   const [medalIcon, setMedalIcon] = useState("🏅");
-  const [assignId, setAssignId] = useState("");
+  const [assignIds, setAssignIds] = useState([]);
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
   const [photoUrl, setPhotoUrl] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [editGid, setEditGid] = useState(null); // groupId en edición, o null = creando
   const themeColor = "#A78BFA";
-  const nameOf = (id) => { const c = children.find((x) => x.id === id); return c ? c.name : "Sin asignar"; };
   const statusLabel = (s) => (s === "pending" ? "⏳ Por aprobar" : s === "done" ? "✅ Conseguido" : "Abierto");
+
+  // Group challenges so one created for two children shows as one card.
+  const groups = [];
+  const byId = {};
+  for (const c of challenges) {
+    const gid = c.groupId || c.id;
+    if (!byId[gid]) { byId[gid] = { gid, rep: c, childIds: [], statuses: [] }; groups.push(byId[gid]); }
+    if (c.childId) byId[gid].childIds.push(c.childId);
+    byId[gid].statuses.push(c.status);
+  }
 
   function pickPhoto(file) {
     if (!file) return;
@@ -1993,27 +2146,63 @@ function ChallengesManager({ children, challenges, onAdd, onRemove, onDecide }) 
     r.onload = (e) => setPhotoPreview(e.target.result);
     r.readAsDataURL(file);
   }
+  function resetForm() {
+    setTitle(""); setDescription(""); setMedalName("Medalla especial"); setMedalIcon("🏅"); setAssignIds([]); setPhotoFile(null); setPhotoPreview(null); setPhotoUrl(""); setShowForm(false); setEditGid(null);
+  }
+  function openCreate() { resetForm(); setShowForm(true); }
+  function openEdit(g) {
+    setEditGid(g.gid); setTitle(g.rep.title); setDescription(g.rep.description || ""); setMedalName(g.rep.medalName); setMedalIcon(g.rep.medalIcon);
+    setAssignIds([...g.childIds]); setPhotoFile(null); setPhotoPreview(g.rep.photo || null); setPhotoUrl(""); setShowForm(true);
+  }
   function submit() {
-    onAdd(assignId || null, title, description, medalIcon, medalName, photoFile, photoUrl);
-    setTitle(""); setDescription(""); setMedalName("Medalla especial"); setMedalIcon("🏅"); setAssignId(""); setPhotoFile(null); setPhotoPreview(null); setPhotoUrl(""); setShowForm(false);
+    if (editGid) {
+      onEdit(editGid, { title, description, medalIcon, medalName }, photoFile, photoUrl, assignIds);
+    } else {
+      onAdd(assignIds, title, description, medalIcon, medalName, photoFile, photoUrl);
+    }
+    resetForm();
   }
 
   return (
     <section className="fr-dark-surface">
       <h2 className="fr-dark-title">Desafíos</h2>
       <p className="fr-tip">🏅 Los desafíos dan una medalla especial (no monedas). Perfectos para retos puntuales.</p>
-      {challenges.length === 0 ? (
+      {groups.length === 0 ? (
         <p className="fr-dark-empty">Aún no hay desafíos. Pulsa + para crear uno.</p>
       ) : (
         <div className="fr-rich-grid">
-          {challenges.map((c) => (
-            <RichItemCard key={c.id} photo={c.photo} iconFallback={c.medalIcon} colorFallback={themeColor}
-              pill={"🏅 " + c.medalName} badge={null} title={c.title} description={c.description} onDelete={() => onRemove(c.id)}>
-              <div className="fr-assign-row"><span className="fr-assign-label">👤</span><span className="fr-assign-static">{nameOf(c.childId)} · {statusLabel(c.status)}</span></div>
-              {c.status === "pending" && (
-                <div className="fr-approve-actions" style={{ marginTop: 6 }}>
-                  <button className="fr-btn fr-btn-small fr-btn-approve" onClick={() => onDecide(c.id, "approved")}>Aprobar</button>
-                  <button className="fr-btn fr-btn-small fr-btn-reject" onClick={() => onDecide(c.id, "rejected")}>Rechazar</button>
+          {groups.map((g) => (
+            <RichItemCard key={g.gid} photo={g.rep.photo} iconFallback={g.rep.medalIcon} colorFallback={themeColor}
+              pill={"🏅 " + g.rep.medalName} badge={null} title={g.rep.title} description={g.rep.description} onDelete={() => onRemoveGroup(g.gid)}>
+              <div className="fr-assign-row">
+                <span className="fr-assign-label">👤</span>
+                <div className="fr-assign-chips">
+                  {children.map((c) => (
+                    <button key={c.id} type="button"
+                      className={"fr-assign-chip" + (g.childIds.includes(c.id) ? " fr-assign-chip-active" : "")}
+                      style={{ "--child-color": c.color }}
+                      onClick={() => { const nx = g.childIds.includes(c.id) ? g.childIds.filter((x) => x !== c.id) : [...g.childIds, c.id]; onSetAssignment(g.gid, nx); }}>
+                      {g.childIds.includes(c.id) ? "✓ " : ""}{c.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="fr-assign-row">
+                <span className="fr-assign-static">{statusLabel(g.statuses.includes("pending") ? "pending" : (g.statuses.every((s) => s === "done") && g.statuses.length ? "done" : "open"))}</span>
+                <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={() => openEdit(g)}>✏️ Editar</button>
+              </div>
+              {g.statuses.includes("pending") && (
+                <div className="fr-approve-actions" style={{ marginTop: 6, flexWrap: "wrap" }}>
+                  {challenges.filter((c) => (c.groupId || c.id) === g.gid && c.status === "pending").map((c) => {
+                    const ch = children.find((x) => x.id === c.childId);
+                    return (
+                      <span key={c.id} className="fr-approve-actions" style={{ alignItems: "center" }}>
+                        <span className="fr-assign-static">{ch ? ch.name : ""}:</span>
+                        <button className="fr-btn fr-btn-small fr-btn-approve" onClick={() => onDecide(c.id, "approved")}>Aprobar</button>
+                        <button className="fr-btn fr-btn-small fr-btn-reject" onClick={() => onDecide(c.id, "rejected")}>Rechazar</button>
+                      </span>
+                    );
+                  })}
                 </div>
               )}
             </RichItemCard>
@@ -2039,21 +2228,26 @@ function ChallengesManager({ children, challenges, onAdd, onRemove, onDecide }) 
             <input className="fr-dark-input fr-dark-input-small" value={medalIcon} onChange={(e) => setMedalIcon(e.target.value)} />
             <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre de la medalla" value={medalName} onChange={(e) => setMedalName(e.target.value)} />
           </div>
-          <div className="fr-form-row">
-            <label className="fr-dark-label">Para:</label>
-            <select className="fr-dark-input" value={assignId} onChange={(e) => setAssignId(e.target.value)}>
-              <option value="">Sin asignar</option>
-              {children.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+          <div className="fr-assign-form">
+            <label className="fr-dark-label">Para (uno, los dos o ninguno):</label>
+            <div className="fr-assign-chips">
+              {children.map((c) => (
+                <button key={c.id} type="button" className={"fr-assign-chip" + (assignIds.includes(c.id) ? " fr-assign-chip-active" : "")}
+                  style={{ "--child-color": c.color }}
+                  onClick={() => setAssignIds((prev) => prev.includes(c.id) ? prev.filter((x) => x !== c.id) : [...prev, c.id])}>
+                  {assignIds.includes(c.id) ? "✓ " : ""}{c.name}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="fr-form-row" style={{ justifyContent: "flex-end" }}>
-            <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={() => setShowForm(false)}>Cancelar</button>
-            <button className="fr-btn fr-btn-primary" style={{ background: themeColor }} onClick={submit}>Crear desafío</button>
+            <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={resetForm}>Cancelar</button>
+            <button className="fr-btn fr-btn-primary" style={{ background: themeColor }} onClick={submit}>{editGid ? "Guardar cambios" : "Crear desafío"}</button>
           </div>
         </div>
       )}
 
-      <button className="fr-fab" style={{ background: themeColor }} onClick={() => setShowForm((s) => !s)} title="Nuevo desafío">{showForm ? "✕" : "+"}</button>
+      {!showForm && <button className="fr-fab" style={{ background: themeColor }} onClick={openCreate} title="Nuevo desafío">+</button>}
     </section>
   );
 }
@@ -2219,9 +2413,14 @@ function StyleBlock() {
         width: calc(100% - 40px); max-width: 1120px; box-sizing: border-box;
         margin: calc(env(safe-area-inset-top, 0px) + 14px) auto 12px auto; padding: 12px 18px; background: rgba(255,255,255,0.78);
         backdrop-filter: blur(6px); border-radius: 22px; box-shadow: 0 4px 16px rgba(107,78,154,0.12); }
-      .fr-topbar-actions { display: flex; gap: 8px; }
+      .fr-topbar-actions { display: flex; gap: 8px; align-items: center; }
+      .fr-hamburger { position: relative; display: inline-flex; align-items: center; gap: 8px; border: 2px solid #E9E0FF; background: white; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 14px; padding: 8px 14px; border-radius: 999px; cursor: pointer; }
+      .fr-hamburger-icon { font-size: 16px; }
+      .fr-menu-dropdown { width: calc(100% - 40px); max-width: 1120px; margin: -4px auto 12px auto; background: white; border-radius: 18px; box-shadow: 0 10px 30px rgba(107,78,154,0.18); padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+      .fr-menu-item { text-align: left; border: none; background: transparent; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 16px; padding: 12px 14px; border-radius: 12px; cursor: pointer; }
+      .fr-menu-item-active { background: #F3EEFF; }
       .fr-brand-text { display: flex; flex-direction: column; line-height: 1.1; }
-      .fr-familyname-sub { font-size: 13px; color: #8A7BB0; font-family: 'Nunito Sans', sans-serif; display: inline-flex; align-items: center; gap: 8px; margin-top: 2px; }
+      .fr-familyname-sub { font-size: 16px; color: #8A7BB0; font-family: 'Nunito Sans', sans-serif; font-weight: 700; display: inline-flex; align-items: center; gap: 8px; margin-top: 3px; }
       .fr-familyname-editbtn { background: none; border: none; color: #A78BFA; font-size: 12px; cursor: pointer; font-family: 'Nunito Sans', sans-serif; font-weight: 700; padding: 0; }
       .fr-familyname-edit { display: inline-flex; align-items: center; gap: 6px; margin-top: 3px; }
       .fr-familyname-input { border: 2px solid #E9E0FF; border-radius: 8px; padding: 4px 8px; font-size: 13px; color: #6B4E9A; font-family: 'Nunito Sans', sans-serif; }
@@ -2237,17 +2436,17 @@ function StyleBlock() {
       .fr-brand-name { font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 24px; color: #A78BFA; letter-spacing: 0.3px; }
       .fr-child-tabs { display: flex; gap: 8px; padding: 0 20px 12px 20px; flex-wrap: nowrap; max-width: 1120px; margin: 0 auto; }
       .fr-child-tab {
-        display: flex; align-items: center; gap: 9px; border: 3px solid var(--child-color, #A78BFA);
+        display: flex; align-items: center; gap: 8px; border: 3px solid var(--child-color, #A78BFA);
         background: white; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 600;
-        padding: 4px 16px 4px 4px; border-radius: 999px; cursor: pointer; font-size: 15px; flex: 0 1 auto; min-width: 0;
+        padding: 4px 14px 4px 4px; border-radius: 999px; cursor: pointer; font-size: 15px; flex: 0 1 auto; min-width: 0;
         box-shadow: 0 3px 0 var(--child-color, #A78BFA);
       }
       .fr-child-tab-active { background: var(--child-color, #A78BFA); color: white; }
       .fr-child-emoji { font-size: 26px; margin-left: 12px; }
       .fr-child-tab-wrap { position: relative; display: inline-flex; min-width: 0; }
-      .fr-avatar-ring { width: 56px; height: 56px; border-radius: 50%; padding: 3px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; flex: none; }
+      .fr-avatar-ring { width: 66px; height: 66px; border-radius: 50%; padding: 4px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; flex: none; }
       .fr-child-avatar { width: 100%; height: 100%; border-radius: 50%; background-size: cover; background-position: center; display: block; border: 2px solid white; box-sizing: border-box; }
-      .fr-child-avatar-emoji { display: flex; align-items: center; justify-content: center; background: #F3EEFF; font-size: 26px; }
+      .fr-child-avatar-emoji { display: flex; align-items: center; justify-content: center; background: #F3EEFF; font-size: 30px; }
       .fr-child-tab-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .fr-photo-edit {
         position: absolute; bottom: -6px; right: -6px; width: 22px; height: 22px; border-radius: 50%;
@@ -2255,14 +2454,24 @@ function StyleBlock() {
         font-size: 11px; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.15);
       }
       .fr-balance-bar {
-        margin: 0 auto 10px auto; max-width: 1120px; background: white; border: 3px solid; border-radius: 999px;
-        padding: 10px 18px; display: flex; align-items: center; gap: 8px; width: fit-content;
-        font-family: 'Fredoka', sans-serif; box-shadow: 0 3px 0 rgba(0,0,0,0.05);
+        margin: 0 20px 12px 20px; background: white; border: 3px solid; border-radius: 22px;
+        padding: 8px 14px; display: inline-flex; align-items: center; gap: 10px; width: fit-content; cursor: pointer;
+        font-family: 'Fredoka', sans-serif; box-shadow: 0 3px 0 rgba(0,0,0,0.05); text-align: left;
       }
-      .fr-balance-star { font-size: 20px; }
-      .fr-balance-num { font-size: 20px; font-weight: 700; color: #6B4E9A; }
-      .fr-balance-label { font-size: 13px; color: #A78BFA; font-family: 'Nunito Sans', sans-serif; }
+      .fr-balance-star { font-size: 26px; display: inline-flex; }
+      .fr-balance-num { font-size: 30px; font-weight: 700; color: #6B4E9A; line-height: 1; }
+      .fr-balance-label { font-size: 12px; color: #A78BFA; font-family: 'Nunito Sans', sans-serif; font-weight: 700; line-height: 1.15; }
+      .fr-balance-chevron { font-size: 26px; color: #C9BEE6; margin-left: 2px; }
       .fr-balance-penalty { font-family: 'Fredoka', sans-serif; font-size: 13px; color: #E0573E; background: #FDEAE6; padding: 2px 10px; border-radius: 999px; }
+      .fr-ledger-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: 12px; background: white; border: 2px solid #F3EEFF; }
+      .fr-ledger-plus { color: #2E9E5B; font-weight: 700; font-family: 'Fredoka', sans-serif; white-space: nowrap; }
+      .fr-ledger-minus { color: #E0573E; font-weight: 700; font-family: 'Fredoka', sans-serif; white-space: nowrap; }
+      .fr-ledger-label { font-size: 14px; color: #6B4E9A; font-family: 'Nunito Sans', sans-serif; font-weight: 600; }
+      .fr-ledger-date { font-size: 11px; color: #A99BC7; }
+      .fr-ledger-card { background: #FBF8FF; border-radius: 22px; padding: 18px; width: min(440px, 90vw); max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 20px 50px rgba(0,0,0,0.25); }
+      .fr-ledger-head { display: flex; align-items: center; justify-content: space-between; font-family: 'Fredoka', sans-serif; font-weight: 700; color: #6B4E9A; font-size: 18px; margin-bottom: 6px; }
+      .fr-ledger-total { font-family: 'Fredoka', sans-serif; font-weight: 700; color: #6B4E9A; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+      .fr-ledger-list { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
       .fr-subtabs { display: flex; gap: 6px; padding: 0 20px 10px 20px; flex-wrap: wrap; max-width: 1120px; margin: 0 auto; }
       .fr-subtab {
         border: none; background: #F3EEFF; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 600;
