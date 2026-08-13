@@ -481,6 +481,9 @@ export default function FamilyRewardsApp() {
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState("");
   const [showPinGate, setShowPinGate] = useState(false);
+  const [pendingReset, setPendingReset] = useState(null);
+  const [resetPinInput, setResetPinInput] = useState("");
+  const [resetPinError, setResetPinError] = useState("");
   const [celebration, setCelebration] = useState(null);
   const [editingFamilyName, setEditingFamilyName] = useState(false);
   const [familyNameDraft, setFamilyNameDraft] = useState("");
@@ -624,8 +627,10 @@ export default function FamilyRewardsApp() {
     if (Date.now() - p.ts > 86400000) return;
     if (lastPraiseAnimRef.current === p.ts) return;
     lastPraiseAnimRef.current = p.ts;
-    const emojis = PRAISE_ANIMS[p.anim ?? 0] || PRAISE_ANIMS[0];
-    celebrateBurst("success", "default", emojis);
+    const ch = data.children.find((c) => c.id === childId);
+    const theme = themeOf(ch);
+    const emojis = theme !== "default" ? THEMES[theme].confetti : (PRAISE_ANIMS[p.anim ?? 0] || PRAISE_ANIMS[0]);
+    celebrateBurst("success", theme, emojis);
   }, [mode, activeChildId, data]);
 
   if (ready && !data) {
@@ -742,7 +747,9 @@ export default function FamilyRewardsApp() {
     const ch = next.children.find((c) => c.id === childId);
     emit(next, `${ch ? ch.name : "Tu peque"} ha recibido un mensaje de ánimo 💛`);
     save(next);
-    celebrateBurst("success", "default", PRAISE_ANIMS[anim]);
+    const theme = themeOf(ch);
+    const themedEmojis = theme !== "default" ? THEMES[theme].confetti : PRAISE_ANIMS[anim];
+    celebrateBurst("success", theme, themedEmojis);
   }
 
   function dismissPraise() {
@@ -865,7 +872,7 @@ export default function FamilyRewardsApp() {
     save(next);
   }
 
-  async function editTask(groupId, fields, photoFile, photoUrl) {
+  async function editTask(groupId, fields, photoFile, photoUrl, childIds) {
     const next = structuredClone(data);
     let photo;
     if (photoUrl && photoUrl.trim()) photo = photoUrl.trim();
@@ -878,6 +885,26 @@ export default function FamilyRewardsApp() {
         if (fields.kind != null) { t.kind = fields.kind; if (fields.kind === "family") t.points = 0; else if (fields.points != null) t.points = fields.points || 1; }
         else if (fields.points != null) t.points = fields.points || 1;
         if (photo !== undefined) t.photo = photo;
+      }
+    }
+    // reconcile assignment in the SAME save (doing it as a separate call would race against a stale `data` closure and clobber this edit)
+    if (childIds) {
+      const group = next.tasks.filter((t) => (t.groupId || t.id) === groupId);
+      if (group.length) {
+        const template = { ...group[0] };
+        const desired = childIds.length ? childIds : [null];
+        const activeByChild = {};
+        for (const t of group) if (t.active) activeByChild[t.childId || "null"] = t;
+        for (const t of group) t.active = false;
+        for (const cid of desired) {
+          const key = cid || "null";
+          if (activeByChild[key]) { activeByChild[key].active = true; activeByChild[key].childId = cid; }
+          else {
+            const inactive = group.find((t) => !t.active && (t.childId || "null") === key);
+            if (inactive) { inactive.active = true; inactive.childId = cid; }
+            else next.tasks.push({ ...template, id: uid(), groupId, childId: cid, active: true });
+          }
+        }
       }
     }
     save(next);
@@ -999,7 +1026,7 @@ export default function FamilyRewardsApp() {
     save(next);
   }
 
-  async function addReward(childId, title, cost, icon, photoFile, description, tag, photoUrl) {
+  async function addReward(childIds, title, cost, icon, photoFile, description, tag, photoUrl) {
     if (!title.trim() || !cost) return;
     const next = structuredClone(data);
     if (!next.rewards) next.rewards = [];
@@ -1009,7 +1036,11 @@ export default function FamilyRewardsApp() {
     } else if (photoFile) {
       try { photo = await fileToResizedDataUrl(photoFile); } catch (e) { console.error(e); }
     }
-    next.rewards.push({ id: uid(), childId, title: title.trim(), cost: Number(cost), icon: icon || "🎁", active: true, photo, description: (description || "").trim(), tag: (tag || "").trim() });
+    const ids = Array.isArray(childIds) ? childIds.filter(Boolean) : (childIds ? [childIds] : []);
+    const targets = ids.length ? ids : [null];
+    const groupId = uid();
+    const base = { groupId, title: title.trim(), cost: Number(cost), icon: icon || "🎁", active: true, photo, description: (description || "").trim(), tag: (tag || "").trim() };
+    for (const cid of targets) next.rewards.push({ id: uid(), childId: cid, ...base });
     save(next);
   }
 
@@ -1018,7 +1049,10 @@ export default function FamilyRewardsApp() {
       const dataUrl = await fileToResizedDataUrl(file);
       const next = structuredClone(data);
       const reward = next.rewards.find((r) => r.id === rewardId);
-      if (reward) reward.photo = dataUrl;
+      if (reward) {
+        const gid = reward.groupId || reward.id;
+        for (const r of next.rewards) if ((r.groupId || r.id) === gid) r.photo = dataUrl;
+      }
       save(next);
     } catch (e) {
       console.error("No se pudo actualizar la foto de la recompensa", e);
@@ -1029,30 +1063,73 @@ export default function FamilyRewardsApp() {
     if (!url || !url.trim()) return;
     const next = structuredClone(data);
     const reward = next.rewards.find((r) => r.id === rewardId);
-    if (reward) reward.photo = url.trim();
+    if (reward) {
+      const gid = reward.groupId || reward.id;
+      for (const r of next.rewards) if ((r.groupId || r.id) === gid) r.photo = url.trim();
+    }
     save(next);
   }
 
-  function removeReward(rewardId) {
+  function removeRewardGroup(groupId) {
     const next = structuredClone(data);
-    const r = next.rewards.find((x) => x.id === rewardId);
-    if (r) r.active = false;
+    for (const r of next.rewards) if ((r.groupId || r.id) === groupId) r.active = false;
     save(next);
   }
 
-  async function editReward(rewardId, fields, photoFile, photoUrl) {
+  async function editReward(groupId, fields, photoFile, photoUrl, childIds) {
     const next = structuredClone(data);
     let photo;
     if (photoUrl && photoUrl.trim()) photo = photoUrl.trim();
     else if (photoFile) { try { photo = await fileToResizedDataUrl(photoFile); } catch (e) { console.error(e); } }
-    const r = next.rewards.find((x) => x.id === rewardId);
-    if (r) {
-      if (fields.title != null) r.title = fields.title.trim();
-      if (fields.description != null) r.description = fields.description.trim();
-      if (fields.tag != null) r.tag = fields.tag.trim();
-      if (fields.cost != null) r.cost = Number(fields.cost) || r.cost;
-      if (fields.icon != null) r.icon = fields.icon || "🎁";
-      if (photo !== undefined) r.photo = photo;
+    for (const r of next.rewards) {
+      if ((r.groupId || r.id) === groupId) {
+        if (fields.title != null) r.title = fields.title.trim();
+        if (fields.description != null) r.description = fields.description.trim();
+        if (fields.tag != null) r.tag = fields.tag.trim();
+        if (fields.cost != null) r.cost = Number(fields.cost) || r.cost;
+        if (fields.icon != null) r.icon = fields.icon || "🎁";
+        if (photo !== undefined) r.photo = photo;
+      }
+    }
+    if (childIds) {
+      const group = next.rewards.filter((r) => (r.groupId || r.id) === groupId);
+      if (group.length) {
+        const template = { ...group[0] };
+        const desired = childIds.length ? childIds : [null];
+        const activeByChild = {};
+        for (const r of group) if (r.active) activeByChild[r.childId || "null"] = r;
+        for (const r of group) r.active = false;
+        for (const cid of desired) {
+          const key = cid || "null";
+          if (activeByChild[key]) { activeByChild[key].active = true; activeByChild[key].childId = cid; }
+          else {
+            const inactive = group.find((r) => !r.active && (r.childId || "null") === key);
+            if (inactive) { inactive.active = true; inactive.childId = cid; }
+            else next.rewards.push({ ...template, id: uid(), groupId, childId: cid, active: true });
+          }
+        }
+      }
+    }
+    save(next);
+  }
+
+  function setRewardAssignment(groupId, childIds) {
+    const next = structuredClone(data);
+    const group = next.rewards.filter((r) => (r.groupId || r.id) === groupId);
+    if (!group.length) return;
+    const template = { ...group[0] };
+    const desired = (childIds && childIds.length) ? childIds : [null];
+    const activeByChild = {};
+    for (const r of group) if (r.active) activeByChild[r.childId || "null"] = r;
+    for (const r of group) r.active = false;
+    for (const cid of desired) {
+      const key = cid || "null";
+      if (activeByChild[key]) { activeByChild[key].active = true; activeByChild[key].childId = cid; }
+      else {
+        const inactive = group.find((r) => !r.active && (r.childId || "null") === key);
+        if (inactive) { inactive.active = true; inactive.childId = cid; }
+        else next.rewards.push({ ...template, id: uid(), groupId, childId: cid, active: true });
+      }
     }
     save(next);
   }
@@ -1137,6 +1214,45 @@ export default function FamilyRewardsApp() {
       setShowPinGate(false);
     } else {
       setPinError("PIN incorrecto. Inténtalo de nuevo.");
+    }
+  }
+
+  function requestReset(childId, scopes) {
+    setPendingReset({ childId, scopes });
+    setResetPinInput("");
+    setResetPinError("");
+  }
+
+  function resetChildData(childId, scopes) {
+    const next = structuredClone(data);
+    if (scopes.tasks) {
+      const childTaskIds = new Set(next.tasks.filter((t) => t.childId === childId).map((t) => t.id));
+      for (const dateKey of Object.keys(next.logs)) {
+        const day = next.logs[dateKey];
+        for (const taskId of Object.keys(day)) {
+          if (childTaskIds.has(taskId)) delete day[taskId];
+        }
+        if (Object.keys(day).length === 0) delete next.logs[dateKey];
+      }
+      next.redemptions = (next.redemptions || []).filter((r) => r.childId !== childId);
+      next.bonuses = (next.bonuses || []).filter((b) => b.childId !== childId);
+      if (next.pending) next.pending[childId] = [];
+    }
+    if (scopes.medals) {
+      if (next.achievements) next.achievements[childId] = [];
+      if (!next.specialMedals) next.specialMedals = {};
+      next.specialMedals[childId] = [];
+    }
+    save(next);
+  }
+
+  function confirmReset() {
+    if (!pendingReset) return;
+    if (resetPinInput === data.pin) {
+      resetChildData(pendingReset.childId, pendingReset.scopes);
+      setPendingReset(null);
+    } else {
+      setResetPinError("PIN incorrecto. Inténtalo de nuevo.");
     }
   }
 
@@ -1226,6 +1342,22 @@ export default function FamilyRewardsApp() {
             <div className="fr-modal-actions">
               <button className="fr-btn fr-btn-ghost" onClick={() => setShowPinGate(false)}>Cancelar</button>
               <button className="fr-btn fr-btn-primary" onClick={confirmPin}>Entrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingReset && (
+        <div className="fr-modal-overlay">
+          <div className="fr-modal">
+            <h3 className="fr-modal-title">Confirmar reseteo 🔐</h3>
+            <p className="fr-modal-sub">Vuelve a introducir el PIN de padres para poner estos datos a cero. Esta acción no se puede deshacer.</p>
+            <input type="password" inputMode="numeric" maxLength={6} className="fr-pin-input" value={resetPinInput}
+              onChange={(e) => setResetPinInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && confirmReset()} autoFocus />
+            {resetPinError && <div className="fr-error">{resetPinError}</div>}
+            <div className="fr-modal-actions">
+              <button className="fr-btn fr-btn-ghost" onClick={() => setPendingReset(null)}>Cancelar</button>
+              <button className="fr-btn fr-btn-primary" style={{ background: "#E0573E" }} onClick={confirmReset}>Resetear</button>
             </div>
           </div>
         </div>
@@ -1372,10 +1504,8 @@ export default function FamilyRewardsApp() {
                 onAdd={addChallenge} onRemoveGroup={removeChallengeGroup} onDecide={decideChallenge} onSetAssignment={setChallengeAssignment} onEdit={editChallenge} />
             )}
             {parentTab === "recompensas" && (
-              <>
-                <ChildBar children={children} activeId={activeChild.id} onPick={setActiveChildId} />
-                <RewardsManager activeChild={activeChild} rewards={rewards} onAdd={(title, cost, icon, photoFile, description, tag, photoUrl) => addReward(activeChild.id, title, cost, icon, photoFile, description, tag, photoUrl)} onRemove={removeReward} onUpdatePhoto={updateRewardPhoto} onUpdatePhotoUrl={updateRewardPhotoUrl} redemptions={redemptions} onEdit={editReward} />
-              </>
+              <RewardsManager children={children} rewards={data.rewards.filter((r) => r.active)}
+                onAdd={addReward} onRemoveGroup={removeRewardGroup} onUpdatePhoto={updateRewardPhoto} onUpdatePhotoUrl={updateRewardPhotoUrl} onSetAssignment={setRewardAssignment} onEdit={editReward} redemptions={redemptions} />
             )}
             {parentTab === "progreso" && (
               <>
@@ -1386,7 +1516,7 @@ export default function FamilyRewardsApp() {
             {parentTab === "ajustes" && (
               <>
                 <ChildBar children={children} activeId={activeChild.id} onPick={setActiveChildId} />
-                <SettingsPanel settings={settings} onUpdate={updateSettings} children={children} activeChild={activeChild} onSetColor={setChildColor} onSetTheme={setChildTheme} parentTheme={data.parentTheme || "default"} onSetParentTheme={setParentTheme} onSetPhoto={updateChildPhoto} onSetPhotoUrl={updateChildPhotoUrl} />
+                <SettingsPanel settings={settings} onUpdate={updateSettings} children={children} activeChild={activeChild} onSetColor={setChildColor} onSetTheme={setChildTheme} parentTheme={data.parentTheme || "default"} onSetParentTheme={setParentTheme} onSetPhoto={updateChildPhoto} onSetPhotoUrl={updateChildPhotoUrl} onRequestReset={requestReset} />
               </>
             )}
           </main>
@@ -1762,7 +1892,7 @@ function ApprovalsPanel({ children, taskApprovals, redemptionApprovals, challeng
       </section>
 
       <section className="fr-card">
-        <h2 className="fr-card-title">Canjes por aprobar</h2>
+        <h2 className="fr-card-title">Recompensas por aprobar</h2>
         {redemptionApprovals.length === 0 ? (
           <p className="fr-empty">No hay canjes pendientes.</p>
         ) : (
@@ -1838,8 +1968,7 @@ function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, on
     if (freqType === "weekly") frequency = { type: "weekly", days: weekdays };
     if (freqType === "date") frequency = { type: "date", date };
     if (editGid) {
-      onEdit(editGid, { title, description, points: Number(points) || 1, kind, frequency }, photoFile, photoUrl);
-      onSetAssignment(editGid, assignIds);
+      onEdit(editGid, { title, description, points: Number(points) || 1, kind, frequency }, photoFile, photoUrl, assignIds);
     } else {
       onAdd(assignIds, title, Number(points) || 1, frequency, photoFile, description, kind, photoUrl);
     }
@@ -1866,7 +1995,7 @@ function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, on
               : <span>➕ foto</span>}
             <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pickPhoto(e.target.files[0])} />
           </label>
-          <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre de la tarea" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <input className="fr-dark-input" style={{ flex: 1, minWidth: 0 }} placeholder="Nombre de la tarea" value={title} onChange={(e) => setTitle(e.target.value)} />
         </div>
         <input className="fr-dark-input" placeholder="…o pega la URL de una imagen (https://...)" value={photoUrl}
           onChange={(e) => { setPhotoUrl(e.target.value); setPhotoFile(null); setPhotoPreview(null); }} />
@@ -1947,7 +2076,7 @@ function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, on
                           const nextIds = g.childIds.includes(c.id) ? g.childIds.filter((x) => x !== c.id) : [...g.childIds, c.id];
                           onSetAssignment(g.gid, nextIds);
                         }}>
-                        {g.childIds.includes(c.id) ? "✓ " : ""}{c.name}
+                        {c.name}
                       </button>
                     ))}
                   </div>
@@ -1972,7 +2101,7 @@ function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, on
 }
 
 /* ---------------- Parent: Rewards manager ---------------- */
-function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, onUpdatePhotoUrl, redemptions, onEdit }) {
+function RewardsManager({ children, rewards, onAdd, onRemoveGroup, onUpdatePhoto, onUpdatePhotoUrl, onSetAssignment, onEdit, redemptions }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [tag, setTag] = useState("");
@@ -1983,9 +2112,15 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
   const [photoUrl, setPhotoUrl] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [query, setQuery] = useState("");
-  const [editId, setEditId] = useState(null);
+  const [assignIds, setAssignIds] = useState([]);
+  const [editGid, setEditGid] = useState(null);
+  const themeColor = "#A78BFA";
 
   const redeemCount = (rewardId) => (redemptions || []).filter((r) => r.rewardId === rewardId && r.status === "approved").length;
+
+  function toggleAssign(id) {
+    setAssignIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
 
   function pickPhoto(file) {
     if (!file) return;
@@ -1997,24 +2132,33 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
   }
 
   function resetForm() {
-    setTitle(""); setDescription(""); setTag(""); setCost(5); setIcon("🎁"); setPhotoFile(null); setPhotoPreview(null); setPhotoUrl(""); setShowForm(false); setEditId(null);
+    setTitle(""); setDescription(""); setTag(""); setCost(5); setIcon("🎁"); setPhotoFile(null); setPhotoPreview(null); setPhotoUrl(""); setAssignIds([]); setShowForm(false); setEditGid(null);
   }
   function openCreate() { resetForm(); setShowForm(true); }
-  function openEdit(r) {
-    setEditId(r.id); setTitle(r.title); setDescription(r.description || ""); setTag(r.tag || ""); setCost(r.cost); setIcon(r.icon || "🎁");
-    setPhotoFile(null); setPhotoPreview(r.photo || null); setPhotoUrl(""); setShowForm(true);
+  function openEdit(g) {
+    const r = g.rep;
+    setEditGid(g.gid); setTitle(r.title); setDescription(r.description || ""); setTag(r.tag || ""); setCost(r.cost); setIcon(r.icon || "🎁");
+    setPhotoFile(null); setPhotoPreview(r.photo || null); setPhotoUrl(""); setAssignIds([...g.childIds]); setShowForm(true);
   }
 
   function submit() {
-    if (editId) {
-      onEdit(editId, { title, description, tag, cost, icon }, photoFile, photoUrl);
+    if (editGid) {
+      onEdit(editGid, { title, description, tag, cost, icon }, photoFile, photoUrl, assignIds);
     } else {
-      onAdd(title, cost, icon, photoFile, description, tag, photoUrl);
+      onAdd(assignIds, title, cost, icon, photoFile, description, tag, photoUrl);
     }
     resetForm();
   }
 
   const filtered = rewards.filter((r) => r.title.toLowerCase().includes(query.toLowerCase()));
+  // Group rewards so the same reward assigned to several children shows as ONE card.
+  const groups = [];
+  const byId = {};
+  for (const r of filtered) {
+    const gid = r.groupId || r.id;
+    if (!byId[gid]) { byId[gid] = { gid, rep: r, childIds: [] }; groups.push(byId[gid]); }
+    if (r.childId) byId[gid].childIds.push(r.childId);
+  }
 
   function renderFields() {
     return (
@@ -2026,13 +2170,26 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
               : <span>➕ foto</span>}
             <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pickPhoto(e.target.files[0])} />
           </label>
-          <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre de la recompensa" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <input className="fr-dark-input" style={{ flex: 1, minWidth: 0 }} placeholder="Nombre de la recompensa" value={title} onChange={(e) => setTitle(e.target.value)} />
         </div>
         <input className="fr-dark-input" placeholder="…o pega la URL de una imagen (https://...)" value={photoUrl}
           onChange={(e) => { setPhotoUrl(e.target.value); setPhotoFile(null); setPhotoPreview(null); }} />
         <input className="fr-dark-input" placeholder="Descripción (opcional)" value={description} onChange={(e) => setDescription(e.target.value)} />
         <input className="fr-dark-input" placeholder="Etiqueta (opcional, ej. Tiempo en familia)" value={tag} onChange={(e) => setTag(e.target.value)} />
-        <div className="fr-form-row">
+        <div className="fr-assign-form">
+          <label className="fr-dark-label">Asignar a (uno, varios o ninguno):</label>
+          <div className="fr-assign-chips">
+            {children.map((c) => (
+              <button key={c.id} type="button"
+                className={"fr-assign-chip" + (assignIds.includes(c.id) ? " fr-assign-chip-active" : "")}
+                style={{ "--child-color": c.color }} onClick={() => toggleAssign(c.id)}>
+                {assignIds.includes(c.id) ? "✓ " : ""}{c.name}
+              </button>
+            ))}
+          </div>
+          {assignIds.length === 0 && <span className="fr-assign-hint">Sin asignar: se guarda para otra ocasión.</span>}
+        </div>
+        <div className="fr-form-row fr-form-row-wrap">
           <label className="fr-dark-label">Coste:</label>
           <input type="number" min="1" className="fr-dark-input fr-dark-input-small" value={cost} onChange={(e) => setCost(e.target.value)} />
           <label className="fr-dark-label">Icono:</label>
@@ -2040,7 +2197,7 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
         </div>
         <div className="fr-form-row" style={{ justifyContent: "flex-end" }}>
           <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={resetForm}>Cancelar</button>
-          <button className="fr-btn fr-btn-primary" style={{ background: activeChild.color }} onClick={submit}>{editId ? "Guardar cambios" : "Añadir recompensa"}</button>
+          <button className="fr-btn fr-btn-primary" style={{ background: themeColor }} onClick={submit}>{editGid ? "Guardar cambios" : "Añadir recompensa"}</button>
         </div>
       </>
     );
@@ -2048,41 +2205,61 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
 
   return (
     <section className="fr-dark-surface">
-      <h2 className="fr-dark-title">Recompensas de {activeChild.name}</h2>
+      <h2 className="fr-dark-title">Recompensas</h2>
       <SearchBar value={query} onChange={setQuery} placeholder="Buscar recompensas..." />
-      <p className="fr-tip">💡 Ve rotando las recompensas de vez en cuando: la variedad mantiene la motivación.</p>
       {rewards.length === 0 ? (
-        <p className="fr-dark-empty">Aún no hay recompensas. Pulsa el botón de abajo para crear la primera.</p>
+        <p className="fr-dark-empty">Aún no hay recompensas. Pulsa el botón de abajo para crear la primera. Puedes asignarla a un niño, a los dos, o dejarla sin asignar para otra ocasión.</p>
       ) : (
         <div className="fr-rich-grid">
-          {filtered.map((r) => {
-            if (editId === r.id) return <div key={r.id} className="fr-inline-edit-card">{renderFields()}</div>;
-            const count = redeemCount(r.id);
-            const pill = count >= 5 ? "🔁 Muy repetida" : r.tag;
+          {groups.map((g) => {
+            if (editGid === g.gid) return <div key={g.gid} className="fr-inline-edit-card">{renderFields()}</div>;
+            const count = redeemCount(g.rep.id);
+            const pill = count >= 5 ? "🔁 Muy repetida" : g.rep.tag;
             return (
-              <RichItemCard key={r.id} photo={r.photo} iconFallback={r.icon} colorFallback={activeChild.color}
-                pill={pill} badge={<>{r.cost} <Coin /></>} title={r.title} description={r.description}
-                onDelete={() => onRemove(r.id)} onPhotoPick={(f) => onUpdatePhoto(r.id, f)} onPhotoUrl={(u) => onUpdatePhotoUrl(r.id, u)}>
-                <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={() => openEdit(r)}>✏️ Editar</button>
+              <RichItemCard key={g.gid} photo={g.rep.photo} iconFallback={g.rep.icon} colorFallback={themeColor}
+                pill={pill} badge={<>{g.rep.cost} <Coin /></>} title={g.rep.title} description={g.rep.description}
+                onDelete={() => onRemoveGroup(g.gid)} onPhotoPick={(f) => onUpdatePhoto(g.rep.id, f)} onPhotoUrl={(u) => onUpdatePhotoUrl(g.rep.id, u)}>
+                <div className="fr-assign-row">
+                  <span className="fr-assign-label">👤</span>
+                  <div className="fr-assign-chips">
+                    {children.map((c) => (
+                      <button key={c.id} type="button"
+                        className={"fr-assign-chip" + (g.childIds.includes(c.id) ? " fr-assign-chip-active" : "")}
+                        style={{ "--child-color": c.color }}
+                        onClick={() => {
+                          const nextIds = g.childIds.includes(c.id) ? g.childIds.filter((x) => x !== c.id) : [...g.childIds, c.id];
+                          onSetAssignment(g.gid, nextIds);
+                        }}>
+                        {g.childIds.includes(c.id) ? "✓ " : ""}{c.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {g.childIds.length === 0 && <span className="fr-assign-hint">Sin asignar</span>}
+                <button className="fr-btn fr-btn-ghost fr-btn-small" style={{ marginTop: 6 }} onClick={() => openEdit(g)}>✏️ Editar</button>
               </RichItemCard>
             );
           })}
         </div>
       )}
 
-      {showForm && !editId && (
+      {showForm && !editGid && (
         <div className="fr-dark-form">{renderFields()}</div>
       )}
 
       {!showForm && (
-        <button className="fr-add-bar" style={{ background: activeChild.color }} onClick={openCreate}>+ Añadir recompensa</button>
+        <button className="fr-add-bar" style={{ background: themeColor }} onClick={openCreate}>+ Añadir recompensa</button>
       )}
     </section>
   );
 }
 
 /* ---------------- Parent: Settings ---------------- */
-function SettingsPanel({ settings, onUpdate, children, activeChild, onSetColor, onSetTheme, parentTheme, onSetParentTheme, onSetPhoto, onSetPhotoUrl }) {
+function SettingsPanel({ settings, onUpdate, children, activeChild, onSetColor, onSetTheme, parentTheme, onSetParentTheme, onSetPhoto, onSetPhotoUrl, onRequestReset }) {
+  const [resetChildId, setResetChildId] = useState(activeChild.id);
+  const [scopeTasks, setScopeTasks] = useState(true);
+  const [scopeMedals, setScopeMedals] = useState(false);
+  const resetChild = children.find((c) => c.id === resetChildId) || activeChild;
   return (
     <>
       <section className="fr-card">
@@ -2149,6 +2326,32 @@ function SettingsPanel({ settings, onUpdate, children, activeChild, onSetColor, 
           ))}
         </div>
         <p className="fr-empty">Cada hijo puede tener su propio color. Cambia de hijo en las pestañas de arriba para personalizar el de cada uno.</p>
+      </section>
+
+      <section className="fr-card">
+        <h2 className="fr-card-title" style={{ color: "#E0573E" }}>⚠️ Resetear</h2>
+        <p className="fr-empty">Pone a cero los datos seleccionados de un perfil. Se pedirá de nuevo el PIN de padres para confirmar, y no se puede deshacer.</p>
+        <div className="fr-form-row" style={{ marginTop: 8 }}>
+          <label className="fr-form-label">Perfil:</label>
+          <select className="fr-text-input" value={resetChildId} onChange={(e) => setResetChildId(e.target.value)}>
+            {children.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div className="fr-assign-chips" style={{ marginTop: 10 }}>
+          <button type="button" className={"fr-assign-chip" + (scopeTasks ? " fr-assign-chip-active" : "")}
+            style={{ "--child-color": "#E0573E" }} onClick={() => setScopeTasks((s) => !s)}>
+            {scopeTasks ? "✓ " : ""}Tareas hechas y monedas
+          </button>
+          <button type="button" className={"fr-assign-chip" + (scopeMedals ? " fr-assign-chip-active" : "")}
+            style={{ "--child-color": "#E0573E" }} onClick={() => setScopeMedals((s) => !s)}>
+            {scopeMedals ? "✓ " : ""}Medallas conseguidas
+          </button>
+        </div>
+        <button className="fr-btn fr-btn-small" style={{ marginTop: 12, background: "#E0573E" }}
+          disabled={!scopeTasks && !scopeMedals}
+          onClick={() => onRequestReset(resetChildId, { tasks: scopeTasks, medals: scopeMedals })}>
+          Resetear {resetChild.name}
+        </button>
       </section>
     </>
   );
@@ -2258,14 +2461,14 @@ function ChallengesManager({ children, challenges, onAdd, onRemoveGroup, onDecid
               : <span>➕ foto</span>}
             <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pickPhoto(e.target.files[0])} />
           </label>
-          <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre del desafío" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <input className="fr-dark-input" style={{ flex: 1, minWidth: 0 }} placeholder="Nombre del desafío" value={title} onChange={(e) => setTitle(e.target.value)} />
         </div>
         <input className="fr-dark-input" placeholder="…o pega la URL de una imagen (https://...)" value={photoUrl} onChange={(e) => { setPhotoUrl(e.target.value); setPhotoFile(null); setPhotoPreview(null); }} />
         <input className="fr-dark-input" placeholder="Descripción (opcional)" value={description} onChange={(e) => setDescription(e.target.value)} />
         <div className="fr-form-row">
           <label className="fr-dark-label">Medalla:</label>
           <input className="fr-dark-input fr-dark-input-small" value={medalIcon} onChange={(e) => setMedalIcon(e.target.value)} />
-          <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre de la medalla" value={medalName} onChange={(e) => setMedalName(e.target.value)} />
+          <input className="fr-dark-input" style={{ flex: 1, minWidth: 0 }} placeholder="Nombre de la medalla" value={medalName} onChange={(e) => setMedalName(e.target.value)} />
         </div>
         <div className="fr-assign-form">
           <label className="fr-dark-label">Para (uno, los dos o ninguno):</label>
@@ -2530,7 +2733,7 @@ function StyleBlock() {
       .fr-brand-mark { font-size: 28px; }
       .fr-brand-icon { width: 40px; height: 40px; border-radius: 11px; display: block; }
       .fr-brand-name { font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 24px; color: #A78BFA; letter-spacing: 0.3px; }
-      .fr-child-tabs { display: flex; gap: 8px; width: calc(100% - 40px); max-width: 1120px; margin: 0 auto 12px auto; box-sizing: border-box; flex-wrap: nowrap; }
+      .fr-child-tabs { display: flex; gap: 8px; justify-content: center; width: calc(100% - 40px); max-width: 1120px; margin: 0 auto 12px auto; box-sizing: border-box; flex-wrap: nowrap; }
       .fr-child-tab {
         display: flex; align-items: center; gap: 8px; border: 3px solid var(--child-color, #A78BFA);
         background: white; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 600;
@@ -2621,7 +2824,8 @@ function StyleBlock() {
       .fr-reward-title { font-family: 'Fredoka', sans-serif; font-size: 13px; color: #6B4E9A; margin: 6px 0 2px 0; min-height: 32px; }
       .fr-reward-cost { font-size: 13px; color: #C98A00; font-weight: 700; margin-bottom: 8px; }
       .fr-form-block { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
-      .fr-form-row { display: flex; align-items: center; gap: 8px; }
+      .fr-form-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+      .fr-form-row-wrap { flex-wrap: wrap; }
       .fr-form-label { font-size: 13px; color: #6B4E9A; font-weight: 700; }
       .fr-text-input { border: 2px solid #E9E0FF; border-radius: 12px; padding: 10px 12px; font-family: 'Nunito Sans', sans-serif; font-size: 14px; color: #6B4E9A; }
       .fr-text-input-small { width: 64px; }
@@ -2676,7 +2880,7 @@ function StyleBlock() {
       .fr-search-clear { background: none; border: none; color: #A99BC7; cursor: pointer; font-size: 14px; }
       .fr-rich-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 260px)); justify-content: center; gap: 16px; }
       .fr-rich-icon-badge { position: absolute; top: 10px; left: 10px; width: 34px; height: 34px; border-radius: 50%; background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.25); display: flex; align-items: center; justify-content: center; font-size: 18px; }
-      .fr-inline-edit-card { background: white; border-radius: 20px; padding: 14px; border: 3px solid #A78BFA; box-shadow: 0 4px 14px rgba(107,78,154,0.2); display: flex; flex-direction: column; gap: 8px; }
+      .fr-inline-edit-card { background: white; border-radius: 20px; padding: 14px; border: 3px solid #A78BFA; box-shadow: 0 4px 14px rgba(107,78,154,0.2); display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; width: 100%; overflow: hidden; }
       .fr-add-bar { width: 100%; box-sizing: border-box; margin-top: 6px; border: none; border-radius: 16px; padding: 14px; color: white; font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 15px; letter-spacing: 0.3px; text-transform: uppercase; cursor: pointer; box-shadow: 0 4px 12px rgba(107,78,154,0.25); }
       .fr-rich-card { background: white; border-radius: 20px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 12px rgba(107,78,154,0.12); border: 2px solid #F3EEFF; }
       .fr-rich-card-dimmed { opacity: 0.6; }
@@ -2704,8 +2908,8 @@ function StyleBlock() {
       .fr-rich-status-ok { background: #E1F7E8; color: #2F9E5B; }
       .fr-rich-status-wait { background: #FFE8D6; color: #E0793A; }
       .fr-fab { position: absolute; bottom: 16px; right: 16px; width: 52px; height: 52px; border-radius: 50%; border: none; color: white; font-size: 26px; font-family: 'Fredoka', sans-serif; cursor: pointer; box-shadow: 0 4px 14px rgba(107,78,154,0.3); display: flex; align-items: center; justify-content: center; }
-      .fr-dark-form { background: white; border: 2px solid #E9E0FF; border-radius: 18px; padding: 16px; margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
-      .fr-dark-input { background: #FBF9FF; border: 2px solid #E9E0FF; border-radius: 10px; padding: 10px 12px; color: #6B4E9A; font-family: 'Nunito Sans', sans-serif; font-size: 14px; outline: none; }
+      .fr-dark-form { background: white; border: 2px solid #E9E0FF; border-radius: 18px; padding: 16px; margin-top: 16px; display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; width: 100%; }
+      .fr-dark-input { background: #FBF9FF; border: 2px solid #E9E0FF; border-radius: 10px; padding: 10px 12px; color: #6B4E9A; font-family: 'Nunito Sans', sans-serif; font-size: 14px; outline: none; box-sizing: border-box; width: 100%; min-width: 0; }
       .fr-dark-input::placeholder { color: #A99BC7; }
       .fr-dark-input-small { width: 70px; }
       .fr-dark-label { font-size: 13px; color: #6B4E9A; font-weight: 700; }
