@@ -1406,6 +1406,7 @@ function RichItemCard({ photo, iconFallback, colorFallback, pill, badge, title, 
     <div className={"fr-rich-card" + (dimmed ? " fr-rich-card-dimmed" : "")}>
       <div className="fr-rich-media" style={mediaStyle}>
         {!photo && <span className="fr-rich-media-emoji">{iconFallback}</span>}
+        {photo && iconFallback && <span className="fr-rich-icon-badge">{iconFallback}</span>}
         {pill && <span className="fr-rich-pill">{pill}</span>}
         {onDelete && (
           <button className="fr-rich-delete" title="Quitar" onClick={onDelete}>🗑️</button>
@@ -1855,106 +1856,116 @@ function TasksManager({ children, tasks, onAdd, onRemoveGroup, onUpdatePhoto, on
     if (t.childId) byId[gid].childIds.push(t.childId);
   }
 
+  function renderFields() {
+    return (
+      <>
+        <div className="fr-form-row">
+          <label className="fr-dark-photo-picker">
+            {photoPreview ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoPreview})` }} />
+              : photoUrl ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoUrl})` }} />
+              : <span>➕ foto</span>}
+            <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pickPhoto(e.target.files[0])} />
+          </label>
+          <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre de la tarea" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </div>
+        <input className="fr-dark-input" placeholder="…o pega la URL de una imagen (https://...)" value={photoUrl}
+          onChange={(e) => { setPhotoUrl(e.target.value); setPhotoFile(null); setPhotoPreview(null); }} />
+        <input className="fr-dark-input" placeholder="Descripción (opcional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+        <div className="fr-assign-form">
+          <label className="fr-dark-label">Asignar a (uno, varios o ninguno):</label>
+          <div className="fr-assign-chips">
+            {children.map((c) => (
+              <button key={c.id} type="button"
+                className={"fr-assign-chip" + (assignIds.includes(c.id) ? " fr-assign-chip-active" : "")}
+                style={{ "--child-color": c.color }} onClick={() => toggleAssign(c.id)}>
+                {assignIds.includes(c.id) ? "✓ " : ""}{c.name}
+              </button>
+            ))}
+          </div>
+          {assignIds.length === 0 && <span className="fr-assign-hint">Sin asignar: se guarda para otra ocasión.</span>}
+        </div>
+        <div className="fr-freq-toggle">
+          {[["reward", "🪙 Con recompensa"], ["family", "🏠 Responsabilidad familiar"]].map(([key, label]) => (
+            <button key={key} className={"fr-dark-chip" + (kind === key ? " fr-dark-chip-active" : "")} style={{ "--child-color": themeColor }} onClick={() => setKind(key)}>{label}</button>
+          ))}
+        </div>
+        {kind === "reward" && (
+          <div className="fr-form-row">
+            <label className="fr-dark-label">Monedas:</label>
+            <input type="number" min="1" max="20" className="fr-dark-input fr-dark-input-small" value={points} onChange={(e) => setPoints(e.target.value)} />
+          </div>
+        )}
+        <div className="fr-freq-toggle">
+          {[["daily", "Diaria"], ["once", "Única"], ["weekly", "Días de la semana"], ["date", "Fecha concreta"]].map(([key, label]) => (
+            <button key={key} className={"fr-dark-chip" + (freqType === key ? " fr-dark-chip-active" : "")} style={{ "--child-color": themeColor }} onClick={() => setFreqType(key)}>{label}</button>
+          ))}
+        </div>
+        {freqType === "weekly" && (
+          <div className="fr-weekday-picker">
+            {WEEKDAY_LABELS.map((label, idx) => {
+              const jsDay = idx === 6 ? 0 : idx + 1;
+              return (
+                <button key={idx} className={"fr-weekday-chip" + (weekdays.includes(jsDay) ? " fr-weekday-chip-active" : "")} style={{ "--child-color": themeColor }} onClick={() => toggleWeekday(idx)}>{label}</button>
+              );
+            })}
+          </div>
+        )}
+        {freqType === "date" && (
+          <input type="date" className="fr-dark-input" value={date} onChange={(e) => setDate(e.target.value)} />
+        )}
+        <div className="fr-form-row" style={{ justifyContent: "flex-end" }}>
+          <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={resetForm}>Cancelar</button>
+          <button className="fr-btn fr-btn-primary" style={{ background: themeColor }} onClick={submit}>{editGid ? "Guardar cambios" : "Añadir tarea"}</button>
+        </div>
+      </>
+    );
+  }
+
   return (
     <section className="fr-dark-surface">
       <h2 className="fr-dark-title">Tareas</h2>
       <SearchBar value={query} onChange={setQuery} placeholder="Buscar tareas..." />
       {tasks.length === 0 ? (
-        <p className="fr-dark-empty">Aún no hay tareas. Pulsa el botón + para crear la primera. Puedes asignarla a un niño, a los dos, o dejarla sin asignar para otra ocasión.</p>
+        <p className="fr-dark-empty">Aún no hay tareas. Pulsa el botón de abajo para crear la primera. Puedes asignarla a un niño, a los dos, o dejarla sin asignar para otra ocasión.</p>
       ) : (
         <div className="fr-rich-grid">
-          {groups.map((g) => (
-            <RichItemCard key={g.gid} photo={g.rep.photo} iconFallback={g.rep.kind === "family" ? "🏠" : "✅"} colorFallback={themeColor}
-              pill={freqLabelShort(g.rep)} badge={taskBadge(g.rep)} title={g.rep.title} description={g.rep.description}
-              onDelete={() => onRemoveGroup(g.gid)} onPhotoPick={(f) => onUpdatePhoto(g.rep.id, f)} onPhotoUrl={(u) => onUpdatePhotoUrl(g.rep.id, u)}>
-              <div className="fr-assign-row">
-                <span className="fr-assign-label">👤</span>
-                <div className="fr-assign-chips">
-                  {children.map((c) => (
-                    <button key={c.id} type="button"
-                      className={"fr-assign-chip" + (g.childIds.includes(c.id) ? " fr-assign-chip-active" : "")}
-                      style={{ "--child-color": c.color }}
-                      onClick={() => {
-                        const nextIds = g.childIds.includes(c.id) ? g.childIds.filter((x) => x !== c.id) : [...g.childIds, c.id];
-                        onSetAssignment(g.gid, nextIds);
-                      }}>
-                      {g.childIds.includes(c.id) ? "✓ " : ""}{c.name}
-                    </button>
-                  ))}
+          {groups.map((g) =>
+            editGid === g.gid ? (
+              <div key={g.gid} className="fr-inline-edit-card">{renderFields()}</div>
+            ) : (
+              <RichItemCard key={g.gid} photo={g.rep.photo} iconFallback={g.rep.kind === "family" ? "🏠" : "✅"} colorFallback={themeColor}
+                pill={freqLabelShort(g.rep)} badge={taskBadge(g.rep)} title={g.rep.title} description={g.rep.description}
+                onDelete={() => onRemoveGroup(g.gid)} onPhotoPick={(f) => onUpdatePhoto(g.rep.id, f)} onPhotoUrl={(u) => onUpdatePhotoUrl(g.rep.id, u)}>
+                <div className="fr-assign-row">
+                  <span className="fr-assign-label">👤</span>
+                  <div className="fr-assign-chips">
+                    {children.map((c) => (
+                      <button key={c.id} type="button"
+                        className={"fr-assign-chip" + (g.childIds.includes(c.id) ? " fr-assign-chip-active" : "")}
+                        style={{ "--child-color": c.color }}
+                        onClick={() => {
+                          const nextIds = g.childIds.includes(c.id) ? g.childIds.filter((x) => x !== c.id) : [...g.childIds, c.id];
+                          onSetAssignment(g.gid, nextIds);
+                        }}>
+                        {g.childIds.includes(c.id) ? "✓ " : ""}{c.name}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              {g.childIds.length === 0 && <span className="fr-assign-hint">Sin asignar</span>}
-              <button className="fr-btn fr-btn-ghost fr-btn-small" style={{ marginTop: 6 }} onClick={() => openEdit(g)}>✏️ Editar</button>
-            </RichItemCard>
-          ))}
+                {g.childIds.length === 0 && <span className="fr-assign-hint">Sin asignar</span>}
+                <button className="fr-btn fr-btn-ghost fr-btn-small" style={{ marginTop: 6 }} onClick={() => openEdit(g)}>✏️ Editar</button>
+              </RichItemCard>
+            )
+          )}
         </div>
       )}
 
-      {showForm && (
-        <div className="fr-dark-form">
-          <div className="fr-form-row">
-            <label className="fr-dark-photo-picker">
-              {photoPreview ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoPreview})` }} />
-                : photoUrl ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoUrl})` }} />
-                : <span>➕ foto</span>}
-              <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pickPhoto(e.target.files[0])} />
-            </label>
-            <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre de la tarea" value={title} onChange={(e) => setTitle(e.target.value)} />
-          </div>
-          <input className="fr-dark-input" placeholder="…o pega la URL de una imagen (https://...)" value={photoUrl}
-            onChange={(e) => { setPhotoUrl(e.target.value); setPhotoFile(null); setPhotoPreview(null); }} />
-          <input className="fr-dark-input" placeholder="Descripción (opcional)" value={description} onChange={(e) => setDescription(e.target.value)} />
-          <div className="fr-assign-form">
-            <label className="fr-dark-label">Asignar a (uno, varios o ninguno):</label>
-            <div className="fr-assign-chips">
-              {children.map((c) => (
-                <button key={c.id} type="button"
-                  className={"fr-assign-chip" + (assignIds.includes(c.id) ? " fr-assign-chip-active" : "")}
-                  style={{ "--child-color": c.color }} onClick={() => toggleAssign(c.id)}>
-                  {assignIds.includes(c.id) ? "✓ " : ""}{c.name}
-                </button>
-              ))}
-            </div>
-            {assignIds.length === 0 && <span className="fr-assign-hint">Sin asignar: se guarda para otra ocasión.</span>}
-          </div>
-          <div className="fr-freq-toggle">
-            {[["reward", "🪙 Con recompensa"], ["family", "🏠 Responsabilidad familiar"]].map(([key, label]) => (
-              <button key={key} className={"fr-dark-chip" + (kind === key ? " fr-dark-chip-active" : "")} style={{ "--child-color": themeColor }} onClick={() => setKind(key)}>{label}</button>
-            ))}
-          </div>
-          {kind === "reward" && (
-            <div className="fr-form-row">
-              <label className="fr-dark-label">Monedas:</label>
-              <input type="number" min="1" max="20" className="fr-dark-input fr-dark-input-small" value={points} onChange={(e) => setPoints(e.target.value)} />
-            </div>
-          )}
-          <div className="fr-freq-toggle">
-            {[["daily", "Diaria"], ["once", "Única"], ["weekly", "Días de la semana"], ["date", "Fecha concreta"]].map(([key, label]) => (
-              <button key={key} className={"fr-dark-chip" + (freqType === key ? " fr-dark-chip-active" : "")} style={{ "--child-color": themeColor }} onClick={() => setFreqType(key)}>{label}</button>
-            ))}
-          </div>
-          {freqType === "weekly" && (
-            <div className="fr-weekday-picker">
-              {WEEKDAY_LABELS.map((label, idx) => {
-                const jsDay = idx === 6 ? 0 : idx + 1;
-                return (
-                  <button key={idx} className={"fr-weekday-chip" + (weekdays.includes(jsDay) ? " fr-weekday-chip-active" : "")} style={{ "--child-color": themeColor }} onClick={() => toggleWeekday(idx)}>{label}</button>
-                );
-              })}
-            </div>
-          )}
-          {freqType === "date" && (
-            <input type="date" className="fr-dark-input" value={date} onChange={(e) => setDate(e.target.value)} />
-          )}
-          <div className="fr-form-row" style={{ justifyContent: "flex-end" }}>
-            <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={resetForm}>Cancelar</button>
-            <button className="fr-btn fr-btn-primary" style={{ background: themeColor }} onClick={submit}>{editGid ? "Guardar cambios" : "Añadir tarea"}</button>
-          </div>
-        </div>
+      {showForm && !editGid && (
+        <div className="fr-dark-form">{renderFields()}</div>
       )}
 
       {!showForm && (
-        <button className="fr-fab" style={{ background: themeColor }} onClick={openCreate} title="Añadir tarea">+</button>
+        <button className="fr-add-bar" style={{ background: themeColor }} onClick={openCreate}>+ Añadir tarea</button>
       )}
     </section>
   );
@@ -2005,16 +2016,47 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
 
   const filtered = rewards.filter((r) => r.title.toLowerCase().includes(query.toLowerCase()));
 
+  function renderFields() {
+    return (
+      <>
+        <div className="fr-form-row">
+          <label className="fr-dark-photo-picker">
+            {photoPreview ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoPreview})` }} />
+              : photoUrl ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoUrl})` }} />
+              : <span>➕ foto</span>}
+            <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pickPhoto(e.target.files[0])} />
+          </label>
+          <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre de la recompensa" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </div>
+        <input className="fr-dark-input" placeholder="…o pega la URL de una imagen (https://...)" value={photoUrl}
+          onChange={(e) => { setPhotoUrl(e.target.value); setPhotoFile(null); setPhotoPreview(null); }} />
+        <input className="fr-dark-input" placeholder="Descripción (opcional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+        <input className="fr-dark-input" placeholder="Etiqueta (opcional, ej. Tiempo en familia)" value={tag} onChange={(e) => setTag(e.target.value)} />
+        <div className="fr-form-row">
+          <label className="fr-dark-label">Coste:</label>
+          <input type="number" min="1" className="fr-dark-input fr-dark-input-small" value={cost} onChange={(e) => setCost(e.target.value)} />
+          <label className="fr-dark-label">Icono:</label>
+          <input className="fr-dark-input fr-dark-input-small" value={icon} onChange={(e) => setIcon(e.target.value)} />
+        </div>
+        <div className="fr-form-row" style={{ justifyContent: "flex-end" }}>
+          <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={resetForm}>Cancelar</button>
+          <button className="fr-btn fr-btn-primary" style={{ background: activeChild.color }} onClick={submit}>{editId ? "Guardar cambios" : "Añadir recompensa"}</button>
+        </div>
+      </>
+    );
+  }
+
   return (
     <section className="fr-dark-surface">
       <h2 className="fr-dark-title">Recompensas de {activeChild.name}</h2>
       <SearchBar value={query} onChange={setQuery} placeholder="Buscar recompensas..." />
       <p className="fr-tip">💡 Ve rotando las recompensas de vez en cuando: la variedad mantiene la motivación.</p>
       {rewards.length === 0 ? (
-        <p className="fr-dark-empty">Aún no hay recompensas. Pulsa el botón + para crear la primera.</p>
+        <p className="fr-dark-empty">Aún no hay recompensas. Pulsa el botón de abajo para crear la primera.</p>
       ) : (
         <div className="fr-rich-grid">
           {filtered.map((r) => {
+            if (editId === r.id) return <div key={r.id} className="fr-inline-edit-card">{renderFields()}</div>;
             const count = redeemCount(r.id);
             const pill = count >= 5 ? "🔁 Muy repetida" : r.tag;
             return (
@@ -2028,36 +2070,12 @@ function RewardsManager({ activeChild, rewards, onAdd, onRemove, onUpdatePhoto, 
         </div>
       )}
 
-      {showForm && (
-        <div className="fr-dark-form">
-          <div className="fr-form-row">
-            <label className="fr-dark-photo-picker">
-              {photoPreview ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoPreview})` }} />
-                : photoUrl ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoUrl})` }} />
-                : <span>➕ foto</span>}
-              <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pickPhoto(e.target.files[0])} />
-            </label>
-            <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre de la recompensa" value={title} onChange={(e) => setTitle(e.target.value)} />
-          </div>
-          <input className="fr-dark-input" placeholder="…o pega la URL de una imagen (https://...)" value={photoUrl}
-            onChange={(e) => { setPhotoUrl(e.target.value); setPhotoFile(null); setPhotoPreview(null); }} />
-          <input className="fr-dark-input" placeholder="Descripción (opcional)" value={description} onChange={(e) => setDescription(e.target.value)} />
-          <input className="fr-dark-input" placeholder="Etiqueta (opcional, ej. Tiempo en familia)" value={tag} onChange={(e) => setTag(e.target.value)} />
-          <div className="fr-form-row">
-            <label className="fr-dark-label">Coste:</label>
-            <input type="number" min="1" className="fr-dark-input fr-dark-input-small" value={cost} onChange={(e) => setCost(e.target.value)} />
-            <label className="fr-dark-label">Icono:</label>
-            <input className="fr-dark-input fr-dark-input-small" value={icon} onChange={(e) => setIcon(e.target.value)} />
-          </div>
-          <div className="fr-form-row" style={{ justifyContent: "flex-end" }}>
-            <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={resetForm}>Cancelar</button>
-            <button className="fr-btn fr-btn-primary" style={{ background: activeChild.color }} onClick={submit}>{editId ? "Guardar cambios" : "Añadir recompensa"}</button>
-          </div>
-        </div>
+      {showForm && !editId && (
+        <div className="fr-dark-form">{renderFields()}</div>
       )}
 
       {!showForm && (
-        <button className="fr-fab" style={{ background: activeChild.color }} onClick={openCreate} title="Añadir recompensa">+</button>
+        <button className="fr-add-bar" style={{ background: activeChild.color }} onClick={openCreate}>+ Añadir recompensa</button>
       )}
     </section>
   );
@@ -2230,91 +2248,101 @@ function ChallengesManager({ children, challenges, onAdd, onRemoveGroup, onDecid
     resetForm();
   }
 
+  function renderFields() {
+    return (
+      <>
+        <div className="fr-form-row">
+          <label className="fr-dark-photo-picker">
+            {photoPreview ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoPreview})` }} />
+              : photoUrl ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoUrl})` }} />
+              : <span>➕ foto</span>}
+            <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pickPhoto(e.target.files[0])} />
+          </label>
+          <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre del desafío" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </div>
+        <input className="fr-dark-input" placeholder="…o pega la URL de una imagen (https://...)" value={photoUrl} onChange={(e) => { setPhotoUrl(e.target.value); setPhotoFile(null); setPhotoPreview(null); }} />
+        <input className="fr-dark-input" placeholder="Descripción (opcional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+        <div className="fr-form-row">
+          <label className="fr-dark-label">Medalla:</label>
+          <input className="fr-dark-input fr-dark-input-small" value={medalIcon} onChange={(e) => setMedalIcon(e.target.value)} />
+          <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre de la medalla" value={medalName} onChange={(e) => setMedalName(e.target.value)} />
+        </div>
+        <div className="fr-assign-form">
+          <label className="fr-dark-label">Para (uno, los dos o ninguno):</label>
+          <div className="fr-assign-chips">
+            {children.map((c) => (
+              <button key={c.id} type="button" className={"fr-assign-chip" + (assignIds.includes(c.id) ? " fr-assign-chip-active" : "")}
+                style={{ "--child-color": c.color }}
+                onClick={() => setAssignIds((prev) => prev.includes(c.id) ? prev.filter((x) => x !== c.id) : [...prev, c.id])}>
+                {assignIds.includes(c.id) ? "✓ " : ""}{c.name}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="fr-form-row" style={{ justifyContent: "flex-end" }}>
+          <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={resetForm}>Cancelar</button>
+          <button className="fr-btn fr-btn-primary" style={{ background: themeColor }} onClick={submit}>{editGid ? "Guardar cambios" : "Crear desafío"}</button>
+        </div>
+      </>
+    );
+  }
+
   return (
     <section className="fr-dark-surface">
       <h2 className="fr-dark-title">Desafíos</h2>
       <p className="fr-tip">🏅 Los desafíos dan una medalla especial (no monedas). Perfectos para retos puntuales.</p>
       {groups.length === 0 ? (
-        <p className="fr-dark-empty">Aún no hay desafíos. Pulsa + para crear uno.</p>
+        <p className="fr-dark-empty">Aún no hay desafíos. Pulsa el botón de abajo para crear uno.</p>
       ) : (
         <div className="fr-rich-grid">
-          {groups.map((g) => (
-            <RichItemCard key={g.gid} photo={g.rep.photo} iconFallback={g.rep.medalIcon} colorFallback={themeColor}
-              pill={"🏅 " + g.rep.medalName} badge={null} title={g.rep.title} description={g.rep.description} onDelete={() => onRemoveGroup(g.gid)}>
-              <div className="fr-assign-row">
-                <span className="fr-assign-label">👤</span>
-                <div className="fr-assign-chips">
-                  {children.map((c) => (
-                    <button key={c.id} type="button"
-                      className={"fr-assign-chip" + (g.childIds.includes(c.id) ? " fr-assign-chip-active" : "")}
-                      style={{ "--child-color": c.color }}
-                      onClick={() => { const nx = g.childIds.includes(c.id) ? g.childIds.filter((x) => x !== c.id) : [...g.childIds, c.id]; onSetAssignment(g.gid, nx); }}>
-                      {g.childIds.includes(c.id) ? "✓ " : ""}{c.name}
-                    </button>
-                  ))}
+          {groups.map((g) =>
+            editGid === g.gid ? (
+              <div key={g.gid} className="fr-inline-edit-card">{renderFields()}</div>
+            ) : (
+              <RichItemCard key={g.gid} photo={g.rep.photo} iconFallback={g.rep.medalIcon} colorFallback={themeColor}
+                pill={"🏅 " + g.rep.medalName} badge={null} title={g.rep.title} description={g.rep.description} onDelete={() => onRemoveGroup(g.gid)}>
+                <div className="fr-assign-row">
+                  <span className="fr-assign-label">👤</span>
+                  <div className="fr-assign-chips">
+                    {children.map((c) => (
+                      <button key={c.id} type="button"
+                        className={"fr-assign-chip" + (g.childIds.includes(c.id) ? " fr-assign-chip-active" : "")}
+                        style={{ "--child-color": c.color }}
+                        onClick={() => { const nx = g.childIds.includes(c.id) ? g.childIds.filter((x) => x !== c.id) : [...g.childIds, c.id]; onSetAssignment(g.gid, nx); }}>
+                        {g.childIds.includes(c.id) ? "✓ " : ""}{c.name}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              <div className="fr-assign-row">
-                <span className="fr-assign-static">{statusLabel(g.statuses.includes("pending") ? "pending" : (g.statuses.every((s) => s === "done") && g.statuses.length ? "done" : "open"))}</span>
-                <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={() => openEdit(g)}>✏️ Editar</button>
-              </div>
-              {g.statuses.includes("pending") && (
-                <div className="fr-approve-actions" style={{ marginTop: 6, flexWrap: "wrap" }}>
-                  {challenges.filter((c) => (c.groupId || c.id) === g.gid && c.status === "pending").map((c) => {
-                    const ch = children.find((x) => x.id === c.childId);
-                    return (
-                      <span key={c.id} className="fr-approve-actions" style={{ alignItems: "center" }}>
-                        <span className="fr-assign-static">{ch ? ch.name : ""}:</span>
-                        <button className="fr-btn fr-btn-small fr-btn-approve" onClick={() => onDecide(c.id, "approved")}>Aprobar</button>
-                        <button className="fr-btn fr-btn-small fr-btn-reject" onClick={() => onDecide(c.id, "rejected")}>Rechazar</button>
-                      </span>
-                    );
-                  })}
+                <div className="fr-assign-row">
+                  <span className="fr-assign-static">{statusLabel(g.statuses.includes("pending") ? "pending" : (g.statuses.every((s) => s === "done") && g.statuses.length ? "done" : "open"))}</span>
+                  <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={() => openEdit(g)}>✏️ Editar</button>
                 </div>
-              )}
-            </RichItemCard>
-          ))}
+                {g.statuses.includes("pending") && (
+                  <div className="fr-approve-actions" style={{ marginTop: 6, flexWrap: "wrap" }}>
+                    {challenges.filter((c) => (c.groupId || c.id) === g.gid && c.status === "pending").map((c) => {
+                      const ch = children.find((x) => x.id === c.childId);
+                      return (
+                        <span key={c.id} className="fr-approve-actions" style={{ alignItems: "center" }}>
+                          <span className="fr-assign-static">{ch ? ch.name : ""}:</span>
+                          <button className="fr-btn fr-btn-small fr-btn-approve" onClick={() => onDecide(c.id, "approved")}>Aprobar</button>
+                          <button className="fr-btn fr-btn-small fr-btn-reject" onClick={() => onDecide(c.id, "rejected")}>Rechazar</button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </RichItemCard>
+            )
+          )}
         </div>
       )}
 
-      {showForm && (
-        <div className="fr-dark-form">
-          <div className="fr-form-row">
-            <label className="fr-dark-photo-picker">
-              {photoPreview ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoPreview})` }} />
-                : photoUrl ? <span className="fr-onboarding-photo-preview" style={{ backgroundImage: `url(${photoUrl})` }} />
-                : <span>➕ foto</span>}
-              <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => pickPhoto(e.target.files[0])} />
-            </label>
-            <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre del desafío" value={title} onChange={(e) => setTitle(e.target.value)} />
-          </div>
-          <input className="fr-dark-input" placeholder="…o pega la URL de una imagen (https://...)" value={photoUrl} onChange={(e) => { setPhotoUrl(e.target.value); setPhotoFile(null); setPhotoPreview(null); }} />
-          <input className="fr-dark-input" placeholder="Descripción (opcional)" value={description} onChange={(e) => setDescription(e.target.value)} />
-          <div className="fr-form-row">
-            <label className="fr-dark-label">Medalla:</label>
-            <input className="fr-dark-input fr-dark-input-small" value={medalIcon} onChange={(e) => setMedalIcon(e.target.value)} />
-            <input className="fr-dark-input" style={{ flex: 1 }} placeholder="Nombre de la medalla" value={medalName} onChange={(e) => setMedalName(e.target.value)} />
-          </div>
-          <div className="fr-assign-form">
-            <label className="fr-dark-label">Para (uno, los dos o ninguno):</label>
-            <div className="fr-assign-chips">
-              {children.map((c) => (
-                <button key={c.id} type="button" className={"fr-assign-chip" + (assignIds.includes(c.id) ? " fr-assign-chip-active" : "")}
-                  style={{ "--child-color": c.color }}
-                  onClick={() => setAssignIds((prev) => prev.includes(c.id) ? prev.filter((x) => x !== c.id) : [...prev, c.id])}>
-                  {assignIds.includes(c.id) ? "✓ " : ""}{c.name}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="fr-form-row" style={{ justifyContent: "flex-end" }}>
-            <button className="fr-btn fr-btn-ghost fr-btn-small" onClick={resetForm}>Cancelar</button>
-            <button className="fr-btn fr-btn-primary" style={{ background: themeColor }} onClick={submit}>{editGid ? "Guardar cambios" : "Crear desafío"}</button>
-          </div>
-        </div>
+      {showForm && !editGid && (
+        <div className="fr-dark-form">{renderFields()}</div>
       )}
 
-      {!showForm && <button className="fr-fab" style={{ background: themeColor }} onClick={openCreate} title="Nuevo desafío">+</button>}
+      {!showForm && <button className="fr-add-bar" style={{ background: themeColor }} onClick={openCreate}>+ Nuevo desafío</button>}
     </section>
   );
 }
@@ -2482,7 +2510,7 @@ function StyleBlock() {
         backdrop-filter: blur(6px); border-radius: 22px; box-shadow: 0 4px 16px rgba(107,78,154,0.12); }
       .fr-hamburger { position: relative; display: inline-flex; align-items: center; justify-content: center; border: 2px solid #E9E0FF; background: white; color: #6B4E9A; font-weight: 700; padding: 8px 12px; border-radius: 14px; cursor: pointer; flex: none; }
       .fr-hamburger-icon { font-size: 20px; line-height: 1; }
-      .fr-menu-dropdown { width: calc(100% - 40px); max-width: 1120px; margin: -4px auto 12px auto; background: white; border-radius: 18px; box-shadow: 0 10px 30px rgba(107,78,154,0.18); padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+      .fr-menu-dropdown { width: calc(100% - 40px); max-width: 1120px; box-sizing: border-box; margin: -4px auto 12px auto; background: white; border-radius: 18px; box-shadow: 0 10px 30px rgba(107,78,154,0.18); padding: 8px; display: flex; flex-direction: column; gap: 2px; }
       .fr-menu-item { text-align: left; border: none; background: transparent; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 16px; padding: 13px 14px; border-radius: 12px; cursor: pointer; }
       .fr-menu-item-active { background: #F3EEFF; }
       .fr-menu-item-mode { color: #8B5CF6; font-weight: 700; }
@@ -2502,7 +2530,7 @@ function StyleBlock() {
       .fr-brand-mark { font-size: 28px; }
       .fr-brand-icon { width: 40px; height: 40px; border-radius: 11px; display: block; }
       .fr-brand-name { font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 24px; color: #A78BFA; letter-spacing: 0.3px; }
-      .fr-child-tabs { display: flex; gap: 8px; padding: 0 20px 12px 20px; flex-wrap: nowrap; max-width: 1120px; margin: 0 auto; }
+      .fr-child-tabs { display: flex; gap: 8px; width: calc(100% - 40px); max-width: 1120px; margin: 0 auto 12px auto; box-sizing: border-box; flex-wrap: nowrap; }
       .fr-child-tab {
         display: flex; align-items: center; gap: 8px; border: 3px solid var(--child-color, #A78BFA);
         background: white; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 600;
@@ -2522,11 +2550,10 @@ function StyleBlock() {
         font-size: 11px; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.15);
       }
       .fr-balance-bar {
-        margin: 0 20px 12px 20px; max-width: calc(1120px - 40px); background: white; border: 3px solid; border-radius: 22px;
-        padding: 10px 18px; display: flex; align-items: center; justify-content: center; gap: 12px; width: calc(100% - 40px); cursor: pointer;
+        margin: 0 auto 12px auto; width: calc(100% - 40px); max-width: 1120px; background: white; border: 3px solid; border-radius: 22px;
+        padding: 10px 18px; display: flex; align-items: center; justify-content: center; gap: 12px; cursor: pointer;
         font-family: 'Fredoka', sans-serif; box-shadow: 0 3px 0 rgba(0,0,0,0.05); text-align: center; box-sizing: border-box;
       }
-      @media (min-width: 640px) { .fr-balance-bar { margin-left: auto; margin-right: auto; } }
       .fr-balance-star { font-size: 26px; display: inline-flex; }
       .fr-balance-num { font-size: 30px; font-weight: 700; color: #6B4E9A; line-height: 1; }
       .fr-balance-label { font-size: 12px; color: #A78BFA; font-family: 'Nunito Sans', sans-serif; font-weight: 700; line-height: 1.15; }
@@ -2541,14 +2568,14 @@ function StyleBlock() {
       .fr-ledger-head { display: flex; align-items: center; justify-content: space-between; font-family: 'Fredoka', sans-serif; font-weight: 700; color: #6B4E9A; font-size: 18px; margin-bottom: 6px; }
       .fr-ledger-total { font-family: 'Fredoka', sans-serif; font-weight: 700; color: #6B4E9A; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
       .fr-ledger-list { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
-      .fr-subtabs { display: flex; gap: 6px; padding: 0 20px 10px 20px; flex-wrap: wrap; max-width: 1120px; margin: 0 auto; }
+      .fr-subtabs { display: flex; gap: 6px; width: calc(100% - 40px); max-width: 1120px; margin: 0 auto 10px auto; box-sizing: border-box; flex-wrap: wrap; }
       .fr-subtab {
         border: none; background: #F3EEFF; color: #6B4E9A; font-family: 'Fredoka', sans-serif; font-weight: 600;
         padding: 8px 16px; border-radius: 14px; cursor: pointer; font-size: 14px;
       }
       .fr-subtab-active { background: var(--child-color, #A78BFA); color: white; }
       .fr-tab-badge { display: inline-block; margin-left: 6px; background: #FF6F6F; color: white; font-size: 11px; font-weight: 700; min-width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 999px; padding: 0 5px; }
-      .fr-main { padding: 4px 20px 40px 20px; max-width: 1120px; margin: 0 auto; }
+      .fr-main { width: calc(100% - 40px); max-width: 1120px; margin: 4px auto 40px auto; box-sizing: border-box; padding: 0; }
       .fr-onboarding { padding: 4px 20px 40px 20px; max-width: 640px; margin: 0 auto; }
       .fr-card { background: white; border-radius: 24px; padding: 20px; margin-bottom: 18px; box-shadow: 0 4px 14px rgba(167,139,250,0.15); border: 2px solid #F3EEFF; }
       .fr-card-title { font-family: 'Fredoka', sans-serif; font-size: 20px; color: #6B4E9A; margin: 0 0 14px 0; }
@@ -2647,7 +2674,10 @@ function StyleBlock() {
       .fr-search-input { flex: 1; background: transparent; border: none; outline: none; color: #6B4E9A; font-family: 'Nunito Sans', sans-serif; font-size: 14px; }
       .fr-search-input::placeholder { color: #A99BC7; }
       .fr-search-clear { background: none; border: none; color: #A99BC7; cursor: pointer; font-size: 14px; }
-      .fr-rich-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; }
+      .fr-rich-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 260px)); justify-content: center; gap: 16px; }
+      .fr-rich-icon-badge { position: absolute; top: 10px; left: 10px; width: 34px; height: 34px; border-radius: 50%; background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.25); display: flex; align-items: center; justify-content: center; font-size: 18px; }
+      .fr-inline-edit-card { background: white; border-radius: 20px; padding: 14px; border: 3px solid #A78BFA; box-shadow: 0 4px 14px rgba(107,78,154,0.2); display: flex; flex-direction: column; gap: 8px; }
+      .fr-add-bar { width: 100%; box-sizing: border-box; margin-top: 6px; border: none; border-radius: 16px; padding: 14px; color: white; font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 15px; letter-spacing: 0.3px; text-transform: uppercase; cursor: pointer; box-shadow: 0 4px 12px rgba(107,78,154,0.25); }
       .fr-rich-card { background: white; border-radius: 20px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 12px rgba(107,78,154,0.12); border: 2px solid #F3EEFF; }
       .fr-rich-card-dimmed { opacity: 0.6; }
       .fr-rich-media { position: relative; height: 130px; background-size: cover; background-position: center; display: flex; align-items: center; justify-content: center; }
@@ -2693,7 +2723,7 @@ function StyleBlock() {
       }
 
       /* ---- Praise ---- */
-      .fr-praise-banner { margin: 0 auto 10px auto; max-width: 1120px; color: white; border-radius: 16px; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; font-family: 'Fredoka', sans-serif; box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+      .fr-praise-banner { margin: 0 auto 10px auto; width: calc(100% - 40px); max-width: 1120px; box-sizing: border-box; color: white; border-radius: 16px; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; font-family: 'Fredoka', sans-serif; box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
       .fr-praise-close { background: rgba(255,255,255,0.3); border: none; color: white; width: 24px; height: 24px; border-radius: 50%; cursor: pointer; }
       .fr-praise-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
       .fr-praise-text { font-weight: 700; color: #6B4E9A; font-size: 14px; }
