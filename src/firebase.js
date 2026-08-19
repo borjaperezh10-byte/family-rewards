@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 import { initializeApp } from "firebase/app";
 import { getDatabase } from "firebase/database";
+import { getAuth } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBYqqZIscgelR-IZYl4BssPESAlaaNKSyI",
@@ -19,6 +20,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const db = getDatabase(app);
+export const auth = getAuth(app);
 
 // Todos los dispositivos que compartan el mismo FAMILY_ID ven los mismos datos.
 // Puedes usar otro grupo abriendo la app con ?family=otro-id
