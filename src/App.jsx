@@ -315,7 +315,11 @@ function coinMovements(data, childId) {
     }
   }
   for (const b of (data.bonuses || [])) {
-    if (b.childId === childId) moves.push({ date: tsToDate(b.ts), amount: b.coins || 0, sign: 1, label: "Sorpresa 🎁" });
+    if (b.childId === childId) {
+      const amt = b.coins || 0;
+      const label = b.reason === "sorpresa" ? "Sorpresa 🎁" : (b.reason ? b.reason : (amt >= 0 ? "Monedas añadidas" : "Monedas descontadas"));
+      moves.push({ date: tsToDate(b.ts), amount: Math.abs(amt), sign: amt >= 0 ? 1 : -1, label });
+    }
   }
   for (const r of (data.redemptions || [])) {
     if (r.childId === childId && r.status === "approved") moves.push({ date: r.dateDecided || r.dateRequested, amount: r.cost, sign: -1, label: `Recompensa: ${r.rewardTitle}` });
@@ -563,7 +567,7 @@ export default function FamilyRewardsApp() {
         });
         return;
       }
-      if (dbUnsub) return; // already listening
+      if (dbUnsub) return;
       const r = ref(db, "families/" + FAMILY_ID);
       dbUnsub = onValue(
         r,
@@ -746,6 +750,24 @@ export default function FamilyRewardsApp() {
       }
     }
     save(next);
+  }
+
+  function adjustCoins(childId, amount, reason) {
+    const amt = Number(amount);
+    if (!amt || !reason || !reason.trim()) return;
+    const next = structuredClone(data);
+    if (!next.bonuses) next.bonuses = [];
+    next.bonuses.push({ id: uid(), childId, coins: amt, reason: reason.trim(), ts: Date.now() });
+    const cleanReason = reason.trim();
+    next.praise = { childId, message: `${amt > 0 ? "+" : ""}${amt} 🪙 — ${cleanReason}`, anim: Math.floor(Math.random() * PRAISE_ANIMS.length), ts: Date.now() };
+    const ch = next.children.find((c) => c.id === childId);
+    emit(next, `${ch ? ch.name : "Tu peque"} ${amt > 0 ? "ha recibido" : "ha perdido"} ${Math.abs(amt)} monedas 🪙`);
+    save(next);
+    if (amt > 0) {
+      const theme = themeOf(ch);
+      const themedEmojis = theme !== "default" ? THEMES[theme].confetti : PRAISE_ANIMS[next.praise.anim];
+      celebrateBurst("success", theme, themedEmojis);
+    }
   }
 
   function sendPraise(childId) {
@@ -1508,7 +1530,7 @@ export default function FamilyRewardsApp() {
               <ApprovalsPanel children={children} taskApprovals={pendingTaskApprovals()}
                 redemptionApprovals={redemptions.filter((r) => r.status === "pending")}
                 challengeApprovals={(data.challenges || []).filter((c) => c.active && c.status === "pending")}
-                onDecideTask={decideTask} onDecideRedemption={decideRedemption} onDecideChallenge={decideChallenge} onPraise={sendPraise} />
+                onDecideTask={decideTask} onDecideRedemption={decideRedemption} onDecideChallenge={decideChallenge} onPraise={sendPraise} onAdjustCoins={adjustCoins} />
             )}
             {parentTab === "tareas" && (
               <TasksManager children={children} tasks={data.tasks.filter((t) => t.active)}
@@ -1855,7 +1877,36 @@ function ChildBar({ children, activeId, onPick }) {
   );
 }
 
-function ApprovalsPanel({ children, taskApprovals, redemptionApprovals, challengeApprovals, onDecideTask, onDecideRedemption, onDecideChallenge, onPraise }) {
+function CoinAdjustRow({ child, onAdjustCoins }) {
+  const [amount, setAmount] = useState(1);
+  const [reason, setReason] = useState("");
+  const canSubmit = Number(amount) > 0 && reason.trim().length > 0;
+
+  function apply(sign) {
+    if (!canSubmit) return;
+    onAdjustCoins(child.id, Number(amount) * sign, reason);
+    setAmount(1); setReason("");
+  }
+
+  return (
+    <div className="fr-coinadjust-row">
+      <div className="fr-coinadjust-head">
+        {child.photo ? <span className="fr-childbar-avatar" style={{ backgroundImage: `url(${child.photo})` }} /> : <span className="fr-childbar-emoji">{child.emoji}</span>}
+        <span className="fr-coinadjust-name">{child.name}</span>
+      </div>
+      <div className="fr-coinadjust-fields">
+        <input type="number" min="1" className="fr-dark-input fr-dark-input-small" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        <input className="fr-dark-input" style={{ flex: 1, minWidth: 0 }} placeholder="Motivo (ej. Ha ayudado a su hermano)" value={reason} onChange={(e) => setReason(e.target.value)} />
+      </div>
+      <div className="fr-coinadjust-actions">
+        <button className="fr-btn fr-btn-small" style={{ background: "#2F9E5B" }} disabled={!canSubmit} onClick={() => apply(1)}>➕ Dar</button>
+        <button className="fr-btn fr-btn-small" style={{ background: "#E0573E" }} disabled={!canSubmit} onClick={() => apply(-1)}>➖ Quitar</button>
+      </div>
+    </div>
+  );
+}
+
+function ApprovalsPanel({ children, taskApprovals, redemptionApprovals, challengeApprovals, onDecideTask, onDecideRedemption, onDecideChallenge, onPraise, onAdjustCoins }) {
   const nameOf = (id) => { const c = children.find((x) => x.id === id); return c ? c.name : "Sin asignar"; };
   return (
     <>
@@ -1866,6 +1917,14 @@ function ApprovalsPanel({ children, taskApprovals, redemptionApprovals, challeng
             <button key={c.id} className="fr-btn fr-btn-small" style={{ background: c.color }} onClick={() => onPraise(c.id)}>💛 {c.name}</button>
           ))}
         </div>
+      </section>
+
+      <section className="fr-card">
+        <h2 className="fr-card-title">Dar o quitar monedas 🪙</h2>
+        <p className="fr-empty">Añade o descuenta monedas indicando la cantidad y el motivo. Al niño le aparecerá como un mensaje en su perfil, igual que un ánimo.</p>
+        {children.map((c) => (
+          <CoinAdjustRow key={c.id} child={c} onAdjustCoins={onAdjustCoins} />
+        ))}
       </section>
 
       <section className="fr-card">
@@ -2996,6 +3055,10 @@ function StyleBlock() {
       .fr-assign-chip-active { background: var(--child-color, #A78BFA); color: white; }
       .fr-assign-hint { font-size: 12px; color: #A99BC7; }
       .fr-photo-edit-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+      .fr-coinadjust-row { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 14px; background: #FBF9FF; border: 2px solid #F3EEFF; margin-bottom: 10px; }
+      .fr-coinadjust-head { display: flex; align-items: center; gap: 8px; font-family: 'Fredoka', sans-serif; font-weight: 700; color: #6B4E9A; }
+      .fr-coinadjust-fields { display: flex; gap: 8px; flex-wrap: wrap; }
+      .fr-coinadjust-actions { display: flex; gap: 8px; }
       .fr-photo-edit-preview { width: 64px; height: 64px; border-radius: 50%; background-size: cover; background-position: center; flex: none; border: 3px solid #F3EEFF; }
     `}</style>
   );
